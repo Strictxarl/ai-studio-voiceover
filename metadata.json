@@ -1,0 +1,6 @@
+{
+  "name": "Personal AI Voice Studio",
+  "description": "Personal AI Voiceover and Voice Cloning platform powered by XTTS-v2 with Colab GPU worker integration and multi-provider architecture.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
