@@ -14,6 +14,8 @@ export class XTTSProvider implements VoiceProvider {
       throw new Error("Free GPU worker offline. Please start and connect the Google Colab GPU worker notebook to run XTTS-v2 voice inference.");
     }
 
+    console.log(`[XTTS-v2 Synthesis] Provider: ${this.id} | Voice ID: ${voiceProfile?.id || job.voice_id} (${voiceProfile?.name || 'Custom'}) | Speed: ${job.speed}x | Temp: ${job.temperature} | Repetition Penalty: ${job.repetition_penalty} | Style: ${job.speaking_style || 'Neutral'} | Worker: ${worker.gpu_name}`);
+
     // Queue the job for worker pickup
     await jobService.enqueueJob(job);
     

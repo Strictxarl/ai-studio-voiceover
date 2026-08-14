@@ -6,6 +6,7 @@ import fs from 'fs';
 import { CONFIG } from '../config.js';
 import { jobService } from '../services/jobService.js';
 import { voiceService } from '../services/voiceService.js';
+import { audioService } from '../services/audioService.js';
 
 const router = Router();
 
@@ -166,6 +167,7 @@ router.get(
       speed: job.speed,
       temperature: job.temperature,
       repetition_penalty: job.repetition_penalty,
+      speaking_style: job.speaking_style || 'Neutral',
       output_format: job.output_format,
       voice_profile: {
         name: voice?.name || 'Default Voice',
@@ -237,12 +239,37 @@ router.post(
       const sampleRate = Number(sample_rate) || 24000;
       const ext = (format || 'wav').toLowerCase() as 'wav' | 'mp3';
 
+      const job = jobService.getJob(id);
+      let diagnostics = undefined;
+      if (job) {
+        diagnostics = {
+          provider_requested: job.provider,
+          provider_executed: job.provider,
+          voice_id: job.voice_id,
+          voice_name: job.voice_name,
+          is_custom_voice: job.provider !== 'gemini',
+          fallback_used: false,
+          final_synthesis_engine: job.provider === 'xtts' ? 'Coqui XTTS-v2 (GPU Worker)' : (job.provider === 'openvoice' ? 'OpenVoice v2' : 'F5-TTS Flow Matching'),
+          speed: job.speed,
+          speaking_style: job.speaking_style || 'Neutral',
+          temperature: job.temperature,
+          repetition_penalty: job.repetition_penalty,
+          language: job.language,
+          native_speed_applied: job.provider === 'xtts',
+          native_temperature_applied: job.provider === 'xtts',
+          native_repetition_penalty_applied: job.provider === 'xtts',
+          post_processing_applied: [],
+          exact_duration_seconds: durationSec || Math.round(audioService.getWavDuration(audioBuffer))
+        };
+      }
+
       const result = await jobService.completeJobFromWorker(
         id,
         audioBuffer,
         ext,
         durationSec,
-        sampleRate
+        sampleRate,
+        diagnostics
       );
 
       return res.json({

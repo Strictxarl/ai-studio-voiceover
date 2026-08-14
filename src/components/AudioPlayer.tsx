@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { TTSResult } from '../types';
 import { WaveformPlayer } from './WaveformPlayer';
+import { DiagnosticsCard } from './DiagnosticsCard';
 
 interface AudioPlayerProps {
   result: TTSResult;
@@ -54,6 +55,9 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
         onShare={handleCopyShareLink}
         onDownloadZip={handleDownloadZip}
       />
+
+      {/* Runtime Diagnostics & Acoustic Telemetry Card */}
+      <DiagnosticsCard diagnostics={result.diagnostics} result={result} />
 
       {/* Production Output & Export Hub */}
       <div className="rounded-2xl border border-zinc-800 bg-zinc-900/90 p-4 space-y-3">

@@ -1,9 +1,9 @@
 import fs from 'fs';
 import path from 'path';
-import { GoogleGenAI, Modality } from '@google/genai';
 import { VoiceProvider } from './VoiceProvider.js';
-import { TTSJob, VoiceProfile, TTSResult, ProviderStatusInfo } from '../../src/types.js';
+import { TTSJob, VoiceProfile, TTSResult, ProviderStatusInfo, TTSDiagnostics } from '../../src/types.js';
 import { jobService } from '../services/jobService.js';
+import { audioService } from '../services/audioService.js';
 
 export class F5TTSProvider implements VoiceProvider {
   id = 'f5-tts';
@@ -11,79 +11,45 @@ export class F5TTSProvider implements VoiceProvider {
   model = 'SWivid/F5-TTS';
   supportsCloning = true;
 
-  private getGenAIClient(): GoogleGenAI {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY environment variable is required to power the F5-TTS cloning neural pipeline. Please set GEMINI_API_KEY.");
-    }
-    return new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
-  }
-
-  private pcmToWav(pcmBuffer: Buffer, sampleRate: number = 24000, numChannels: number = 1, bitsPerSample: number = 16): Buffer {
-    const header = Buffer.alloc(44);
-    const dataLength = pcmBuffer.length;
-    const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
-    const blockAlign = numChannels * (bitsPerSample / 8);
-
-    header.write('RIFF', 0);
-    header.writeUInt32LE(36 + dataLength, 4);
-    header.write('WAVE', 8);
-    header.write('fmt ', 12);
-    header.writeUInt32LE(16, 16);
-    header.writeUInt16LE(1, 20); // PCM
-    header.writeUInt16LE(numChannels, 22);
-    header.writeUInt32LE(sampleRate, 24);
-    header.writeUInt32LE(byteRate, 28);
-    header.writeUInt16LE(blockAlign, 32);
-    header.writeUInt16LE(bitsPerSample, 34);
-    header.write('data', 36);
-    header.writeUInt32LE(dataLength, 40);
-
-    return Buffer.concat([header, pcmBuffer]);
-  }
-
-  /**
-   * Selects optimal acoustic tone matching reference profile
-   */
-  private matchVoiceTone(voiceProfile?: VoiceProfile, speakingStyle?: string): 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' {
-    const raw = `${voiceProfile?.name || ''} ${voiceProfile?.description || ''} ${speakingStyle || ''}`.toLowerCase();
-    
-    if (raw.includes('deep') || raw.includes('male') || raw.includes('authoritative') || raw.includes('yusuf') || raw.includes('documentary')) {
-      return 'Fenrir';
-    }
-    if (raw.includes('trailer') || raw.includes('epic') || raw.includes('dramatic') || raw.includes('intense')) {
-      return 'Charon';
-    }
-    if (raw.includes('calm') || raw.includes('story') || raw.includes('podcast') || raw.includes('clara') || raw.includes('intro')) {
-      return 'Zephyr';
-    }
-    if (raw.includes('energetic') || raw.includes('youth') || raw.includes('upbeat')) {
-      return 'Puck';
-    }
-    return 'Kore';
-  }
-
   async processJob(job: TTSJob, voiceProfile?: VoiceProfile): Promise<TTSResult> {
-    // 1. If external F5-TTS server is configured via F5_TTS_API_URL
+    const refAudioPath = voiceProfile?.reference_audio_path;
+    const voiceId = voiceProfile?.id || job.voice_id;
+    const speed = Number(job.speed) || 1.0;
+    const style = job.speaking_style || 'Neutral';
+    const temp = job.temperature !== undefined ? Number(job.temperature) : 0.75;
+    const repPenalty = job.repetition_penalty !== undefined ? Number(job.repetition_penalty) : 2.0;
+
+    // Server-side audit logging
+    console.log(`[F5-TTS Synthesis] Provider: ${this.id} | Voice ID: ${voiceId} (${voiceProfile?.name || 'Custom'}) | Ref Audio Path: ${refAudioPath || 'None'} | Speed: ${speed}x | Temp: ${temp} | Repetition Penalty (ignored by F5): ${repPenalty} | Style: ${style} | Text Length: ${job.text.length}`);
+
+    // Verify reference audio
+    if (!refAudioPath || !fs.existsSync(refAudioPath)) {
+      throw new Error(`[F5-TTS] Missing or invalid reference audio file at: '${refAudioPath}'. Please upload or select a valid reference voice sample.`);
+    }
+
+    const refStats = fs.statSync(refAudioPath);
+    if (refStats.size < 1000) {
+      throw new Error(`[F5-TTS] Reference audio file '${refAudioPath}' is too small (${refStats.size} bytes). Provide a clean 5-30s voice recording.`);
+    }
+
+    const rawRefBuffer = fs.readFileSync(refAudioPath);
+    const refDuration = Math.round(audioService.getWavDuration(rawRefBuffer));
+    const refBase64 = rawRefBuffer.toString('base64');
     const f5ApiUrl = process.env.F5_TTS_API_URL;
+
+    // 1. If external F5-TTS endpoint is configured (e.g. self-hosted server or Colab tunnel)
     if (f5ApiUrl) {
       try {
-        const payload: any = {
+        console.log(`[F5-TTS] Dispatching synthesis request to external endpoint: ${f5ApiUrl}`);
+        const payload = {
           text: job.processed_text || job.text,
-          speed: job.speed || 1.0,
-          language: job.language || 'en'
+          speed,
+          language: job.language || 'en',
+          speaking_style: style,
+          reference_audio_base64: refBase64,
+          reference_audio_filename: path.basename(refAudioPath),
+          reference_audio_format: path.extname(refAudioPath).replace('.', '') || 'wav'
         };
-
-        if (voiceProfile?.reference_audio_path && fs.existsSync(voiceProfile.reference_audio_path)) {
-          payload.reference_audio_base64 = fs.readFileSync(voiceProfile.reference_audio_path).toString('base64');
-        }
 
         const res = await fetch(`${f5ApiUrl.replace(/\/$/, '')}/api/tts`, {
           method: 'POST',
@@ -91,85 +57,94 @@ export class F5TTSProvider implements VoiceProvider {
           body: JSON.stringify(payload)
         });
 
-        if (res.ok) {
-          const audioBuffer = Buffer.from(await res.arrayBuffer());
-          const durationSec = Math.max(1, Math.round(audioBuffer.length / (24000 * 2)));
-          return await jobService.completeJobFromWorker(
-            job.job_id,
-            audioBuffer,
-            'wav',
-            durationSec,
-            24000
-          );
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(`External F5-TTS server returned status ${res.status}: ${errText}`);
         }
-      } catch (externalErr) {
-        console.warn('[F5-TTS] External endpoint failed, falling back to neural zero-shot pipeline:', externalErr);
+
+        const audioBuffer = Buffer.from(await res.arrayBuffer());
+        
+        // Ensure speed timing is applied
+        const { buffer: finalWavBuffer, duration: exactDuration } = await audioService.adjustAudioSpeed(
+          audioBuffer,
+          speed,
+          24000
+        );
+
+        const durationSec = Math.max(1, Math.round(exactDuration));
+        const postProcessing: string[] = [];
+        if (Math.abs(speed - 1.0) >= 0.01) {
+          postProcessing.push(`ffmpeg_atempo_${speed.toFixed(2)}x`);
+        }
+
+        const diagnostics: TTSDiagnostics = {
+          provider_requested: job.provider,
+          provider_executed: 'f5-tts',
+          voice_id: voiceId,
+          voice_name: voiceProfile?.name || 'Custom Cloned Voice',
+          is_custom_voice: true,
+          reference_audio_path: refAudioPath,
+          reference_audio_url: voiceProfile?.reference_audio_url,
+          reference_audio_exists: true,
+          reference_audio_duration_sec: refDuration,
+          reference_audio_size_bytes: refStats.size,
+          fallback_used: false,
+          final_synthesis_engine: 'SWivid/F5-TTS Flow Matching',
+          speed,
+          speaking_style: style,
+          temperature: temp,
+          repetition_penalty: repPenalty,
+          language: job.language || 'en',
+          native_speed_applied: true,
+          native_temperature_applied: false,
+          native_repetition_penalty_applied: false,
+          post_processing_applied: postProcessing,
+          exact_duration_seconds: exactDuration
+        };
+
+        return await jobService.completeJobFromWorker(
+          job.job_id,
+          finalWavBuffer,
+          'wav',
+          durationSec,
+          24000,
+          diagnostics
+        );
+      } catch (err: any) {
+        console.error('[F5-TTS] External endpoint failed:', err.message);
+        throw new Error(`F5-TTS synthesis failed via configured endpoint (${f5ApiUrl}): ${err.message}`);
       }
     }
 
-    // 2. High-fidelity Neural Zero-Shot Synthesis Pipeline
-    // Analyzes voice profile timbre and generates speech matched to reference characteristics
-    const ai = this.getGenAIClient();
-    const matchedVoice = this.matchVoiceTone(voiceProfile, job.speaking_style);
-
-    const promptText = job.processed_text || job.text;
-    const voiceStyleDescription = voiceProfile?.description 
-      ? `in the exact voice timbre and cadence of ${voiceProfile.name} (${voiceProfile.description})`
-      : `in the voice persona of ${voiceProfile?.name || 'the custom narrator'}`;
-
-    const prompt = job.speaking_style && job.speaking_style !== 'Neutral'
-      ? `Narrate ${voiceStyleDescription}, with a ${job.speaking_style.toLowerCase()} inflection: ${promptText}`
-      : `Narrate ${voiceStyleDescription}: ${promptText}`;
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: [{ parts: [{ text: prompt }] }],
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: matchedVoice },
-          },
-        },
-      },
-    });
-
-    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (!base64Audio) {
-      throw new Error("F5-TTS neural voice cloner did not receive synthesized audio data.");
+    // 2. Check for GPU Worker supporting F5-TTS queue
+    const worker = jobService.getOnlineWorker();
+    if (worker && (worker.gpu_name.toLowerCase().includes('f5') || worker.status === 'online')) {
+      console.log(`[F5-TTS] Enqueuing job ${job.job_id} to GPU worker (${worker.gpu_name})...`);
+      await jobService.enqueueJob(job);
+      return await jobService.waitForJobCompletion(job.job_id);
     }
 
-    const rawBuffer = Buffer.from(base64Audio, 'base64');
-    let wavBuffer: Buffer;
-    if (rawBuffer.length >= 4 && rawBuffer.toString('ascii', 0, 4) === 'RIFF') {
-      wavBuffer = rawBuffer;
-    } else {
-      wavBuffer = this.pcmToWav(rawBuffer, 24000, 1, 16);
-    }
-
-    const durationSec = Math.max(1, Math.round(rawBuffer.length / (24000 * 2)));
-    return await jobService.completeJobFromWorker(
-      job.job_id,
-      wavBuffer,
-      'wav',
-      durationSec,
-      24000
+    // 3. Strict error if F5-TTS runner/worker is offline (DO NOT silently generate with Gemini)
+    throw new Error(
+      "F5-TTS is unavailable. Your custom cloned voice cannot currently be generated. Please connect your GPU worker or configure the F5_TTS_API_URL environment variable."
     );
   }
 
   async getStatus(): Promise<ProviderStatusInfo> {
-    const hasKey = !!process.env.GEMINI_API_KEY || !!process.env.F5_TTS_API_URL;
+    const f5ApiUrl = process.env.F5_TTS_API_URL;
+    const worker = jobService.getOnlineWorker();
+    const isOnline = !!f5ApiUrl || !!worker;
 
     return {
       id: this.id,
       name: this.name,
-      provider: 'F5-TTS / Neural Flow Matching',
+      provider: 'F5-TTS / Non-Autoregressive Flow Matching',
       model: this.model,
-      status: hasKey ? 'active' : 'standby',
-      gpu_available: true,
-      inference_type: 'FREE CLOUD INFERENCE',
-      pricing_status: 'Zero-shot Non-autoregressive Voice Flow Matching',
-      description: 'State-of-the-art zero-shot voice cloning engine capable of reproducing reference voice identities from short audio samples.',
+      status: isOnline ? 'active' : 'standby',
+      gpu_available: isOnline,
+      inference_type: 'OPEN SOURCE MODEL',
+      pricing_status: isOnline ? 'Ready for Voice Flow Matching' : 'Worker / Endpoint Required',
+      description: 'State-of-the-art zero-shot voice cloning engine reproducing voice identity directly from reference audio.',
       supports_cloning: true,
       supported_languages: [
         'en', 'es', 'fr', 'de', 'it', 'pt', 'ja', 'ko', 'zh-cn', 'hi', 'ru', 'ar', 'nl', 'tr'
@@ -177,3 +152,4 @@ export class F5TTSProvider implements VoiceProvider {
     };
   }
 }
+

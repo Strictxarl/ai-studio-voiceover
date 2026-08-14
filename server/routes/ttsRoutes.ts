@@ -7,9 +7,31 @@ import { providerRegistry } from '../providers/ProviderRegistry.js';
 import { voiceService } from '../services/voiceService.js';
 import { audioService } from '../services/audioService.js';
 import { CONFIG } from '../config.js';
-import { VoiceProfile } from '../../src/types.js';
+import { VoiceProfile, TTSDiagnostics } from '../../src/types.js';
 
 const router = Router();
+
+const GEMINI_BUILTIN_VOICES = new Set(['kore', 'fenrir', 'charon', 'zephyr', 'puck', 'aoede', 'leda', 'orpheus']);
+
+function isBuiltinGeminiVoice(voiceId: string, requestedProvider?: string): boolean {
+  if (requestedProvider === 'gemini') return true;
+  return GEMINI_BUILTIN_VOICES.has(voiceId.toLowerCase().trim());
+}
+
+function createBuiltinGeminiProfile(voiceId: string, language?: string): VoiceProfile {
+  const vName = voiceId.charAt(0).toUpperCase() + voiceId.slice(1);
+  return {
+    id: voiceId,
+    name: `${vName} (Gemini Cloud Voice)`,
+    engine: 'gemini',
+    description: `Built-in Gemini Cloud TTS character voice (${vName})`,
+    reference_audio_path: '',
+    reference_audio_url: '',
+    created_at: new Date().toISOString(),
+    language: language || 'en',
+    metadata: { isGeminiVoice: true, isBuiltin: true }
+  };
+}
 
 /**
  * POST /api/tts/generate
@@ -39,40 +61,22 @@ router.post('/generate', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Valid script text is required' });
     }
 
-    const geminiVoiceIds = ['kore', 'fenrir', 'charon', 'zephyr', 'puck'];
-    let voice = voiceService.getVoiceById(voice_id);
-    
-    // Determine provider automatically based on voice profile if not explicitly supplied
+    let voice: VoiceProfile | undefined;
     let provider = requestedProvider;
-    if (!provider) {
-      if (geminiVoiceIds.includes(voice_id.toLowerCase())) {
-        provider = 'gemini';
-      } else if (voice?.engine) {
-        provider = voice.engine;
-      } else if (voice?.metadata?.isCloned || voice?.metadata?.isCustom) {
-        provider = 'f5-tts';
-      } else {
-        provider = process.env.DEFAULT_VOICE_PROVIDER || 'gemini';
+
+    // Built-in Gemini voices bypass voiceService lookup and are handled directly by GeminiProvider
+    if (isBuiltinGeminiVoice(voice_id, requestedProvider)) {
+      provider = 'gemini';
+      voice = createBuiltinGeminiProfile(voice_id, language);
+    } else {
+      // Only custom uploaded voices require stored voice profile lookup
+      voice = voiceService.getVoiceById(voice_id);
+      if (!voice) {
+        return res.status(404).json({ error: `Voice profile '${voice_id}' not found` });
       }
-    }
-
-    if (!voice && (provider === 'gemini' || geminiVoiceIds.includes(voice_id.toLowerCase()))) {
-      const vName = voice_id.charAt(0).toUpperCase() + voice_id.slice(1);
-      voice = {
-        id: voice_id,
-        name: `${vName} (Gemini Studio Voice)`,
-        engine: 'gemini',
-        description: `High-fidelity expressive voice character (${vName})`,
-        reference_audio_path: '',
-        reference_audio_url: '',
-        created_at: new Date().toISOString(),
-        language: language || 'en',
-        metadata: { isGeminiVoice: true }
-      };
-    }
-
-    if (!voice) {
-      return res.status(404).json({ error: `Voice profile '${voice_id}' not found` });
+      if (!provider) {
+        provider = voice.engine || (voice.metadata?.isCloned ? 'f5-tts' : 'xtts');
+      }
     }
 
     // Create job entry
@@ -193,33 +197,34 @@ router.post('/documentary', async (req: Request, res: Response) => {
       script,
       language,
       provider = process.env.DEFAULT_VOICE_PROVIDER || 'gemini',
-      pause_duration_ms = 500
+      pause_duration_ms = 850,
+      speed = 1.0,
+      speaking_style = 'Neutral',
+      temperature = 0.75,
+      repetition_penalty = 2.0
     } = req.body;
 
     if (!voice_id || !script) {
       return res.status(400).json({ error: 'voice_id and script are required' });
     }
 
-    let voice = voiceService.getVoiceById(voice_id);
-    if (!voice && provider === 'gemini') {
-      const vName = voice_id.charAt(0).toUpperCase() + voice_id.slice(1);
-      voice = {
-        id: voice_id,
-        name: `${vName} (Gemini Studio Voice)`,
-        description: `High-fidelity expressive voice character (${vName})`,
-        reference_audio_path: '',
-        reference_audio_url: '',
-        created_at: new Date().toISOString(),
-        language: language || 'en',
-        metadata: { isGeminiVoice: true }
-      };
+    let voice: VoiceProfile | undefined;
+    let resolvedProvider = provider;
+
+    if (isBuiltinGeminiVoice(voice_id, provider)) {
+      resolvedProvider = 'gemini';
+      voice = createBuiltinGeminiProfile(voice_id, language);
+    } else {
+      voice = voiceService.getVoiceById(voice_id);
+      if (!voice) {
+        return res.status(404).json({ error: `Voice profile '${voice_id}' not found` });
+      }
+      if (!resolvedProvider) {
+        resolvedProvider = voice.engine || (voice.metadata?.isCloned ? 'f5-tts' : 'xtts');
+      }
     }
 
-    if (!voice) {
-      return res.status(404).json({ error: `Voice profile '${voice_id}' not found` });
-    }
-
-    if (provider === 'xtts') {
+    if (resolvedProvider === 'xtts') {
       const worker = jobService.getOnlineWorker();
       if (!worker) {
         return res.status(503).json({
@@ -235,7 +240,11 @@ router.post('/documentary', async (req: Request, res: Response) => {
       voice_id,
       text: script,
       language: language || voice.language || 'en',
-      provider,
+      provider: resolvedProvider,
+      speed: Number(speed) || 1.0,
+      speaking_style,
+      temperature: Number(temperature) || 0.75,
+      repetition_penalty: Number(repetition_penalty) || 2.0,
       is_documentary: true
     });
     masterJob.chunks_total = chunks.length;
@@ -252,7 +261,7 @@ router.post('/documentary', async (req: Request, res: Response) => {
     (async () => {
       try {
         const chunkResults: string[] = [];
-        const selectedProvider = providerRegistry.getProvider(provider);
+        const selectedProvider = providerRegistry.getProvider(resolvedProvider);
 
         for (let i = 0; i < chunks.length; i++) {
           const chunkText = chunks[i];
@@ -260,7 +269,11 @@ router.post('/documentary', async (req: Request, res: Response) => {
             voice_id,
             text: chunkText,
             language: language || voice.language || 'en',
-            provider
+            provider: resolvedProvider,
+            speed: Number(speed) || 1.0,
+            speaking_style,
+            temperature: Number(temperature) || 0.75,
+            repetition_penalty: Number(repetition_penalty) || 2.0
           });
 
           const result = await selectedProvider.processJob(chunkJob, voice);
@@ -284,7 +297,30 @@ router.post('/documentary', async (req: Request, res: Response) => {
         );
 
         const audioBuf = fs.readFileSync(finalWavPath);
-        await jobService.completeJobFromWorker(masterJob.job_id, audioBuf, 'wav');
+        const exactDur = audioService.getWavDuration(audioBuf);
+        const durationSec = Math.max(1, Math.round(exactDur));
+        const isGeminiMode = resolvedProvider === 'gemini';
+        const masterDiag: TTSDiagnostics = {
+          provider_requested: resolvedProvider,
+          provider_executed: resolvedProvider,
+          voice_id: masterJob.voice_id,
+          voice_name: isGeminiMode ? `${masterJob.voice_id} (Gemini Cloud Voice)` : voice.name,
+          is_custom_voice: !isGeminiMode,
+          fallback_used: false,
+          final_synthesis_engine: isGeminiMode ? 'Google Gemini Flash TTS (Documentary Multi-Chunk Concatenator)' : `${resolvedProvider.toUpperCase()} Documentary Concatenator`,
+          speed: Number(speed) || 1.0,
+          speaking_style: speaking_style || 'Authoritative',
+          temperature: Number(temperature) || 0.75,
+          repetition_penalty: Number(repetition_penalty) || 2.0,
+          language: language || voice.language || 'en',
+          native_speed_applied: false,
+          native_temperature_applied: isGeminiMode,
+          native_repetition_penalty_applied: false,
+          post_processing_applied: [`concat_${chunks.length}_chunks_pause_${pause_duration_ms || 850}ms`, 'pcm_to_wav_24000hz'],
+          exact_duration_seconds: exactDur
+        };
+
+        await jobService.completeJobFromWorker(masterJob.job_id, audioBuf, 'wav', durationSec, 24000, masterDiag);
       } catch (err: any) {
         console.error('Documentary narration job failed:', err);
         jobService.failJob(masterJob.job_id, err.message || 'Documentary script generation failed');

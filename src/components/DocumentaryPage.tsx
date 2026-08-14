@@ -16,6 +16,10 @@ interface DocumentaryPageProps {
     language: string;
     provider: string;
     pause_duration_ms: number;
+    speed?: number;
+    speaking_style?: string;
+    temperature?: number;
+    repetition_penalty?: number;
   }) => Promise<TTSResult>;
   onOpenSharePage?: (jobId: string) => void;
 }
@@ -48,6 +52,9 @@ Today, modern technology allows us to reconstruct these voices and bring ancient
   const [selectedVoiceId, setSelectedVoiceId] = useState<string>(voices[0]?.id || 'preset_doc_narration');
   const [language, setLanguage] = useState<string>('en');
   const [pauseDurationMs, setPauseDurationMs] = useState<number>(850);
+  const [speed, setSpeed] = useState<number>(0.95);
+  const [speakingStyle, setSpeakingStyle] = useState<string>('Authoritative');
+  const [temperature, setTemperature] = useState<number>(0.65);
 
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [progress, setProgress] = useState<number>(0);
@@ -64,7 +71,7 @@ Today, modern technology allows us to reconstruct these voices and bring ancient
 
   const paragraphs = script.split(/\n+/).filter(p => p.trim().length > 0);
   const wordCount = script.trim().split(/\s+/).filter(Boolean).length;
-  const estimatedMin = Math.max(0.5, (wordCount / 150)).toFixed(1);
+  const estimatedMin = Math.max(0.5, (wordCount / (150 * speed))).toFixed(1);
   const isGpuOnline = workerInfo && workerInfo.status !== 'offline';
 
   const handleGenerateDocumentary = async () => {
@@ -97,7 +104,11 @@ Today, modern technology allows us to reconstruct these voices and bring ancient
         script: script.trim(),
         language,
         provider,
-        pause_duration_ms: pauseDurationMs
+        pause_duration_ms: pauseDurationMs,
+        speed,
+        speaking_style: speakingStyle,
+        temperature,
+        repetition_penalty: 2.0
       });
 
       setProgress(100);
@@ -331,6 +342,47 @@ Today, modern technology allows us to reconstruct these voices and bring ancient
                 </select>
               </div>
             )}
+
+            {/* Speaking Style / Emotion */}
+            <div className="space-y-2">
+              <label className="text-xs font-semibold text-zinc-300 flex justify-between items-center">
+                <span>Documentary Tone</span>
+                <span className="text-amber-400 font-mono text-[11px] font-bold">{speakingStyle}</span>
+              </label>
+              <select
+                value={speakingStyle}
+                onChange={(e) => setSpeakingStyle(e.target.value)}
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs text-white focus:border-amber-500 focus:outline-none"
+              >
+                <option value="Authoritative">Authoritative (Documentary / Science / History)</option>
+                <option value="Dark & Gripping">Dark & Gripping (Crime / Mystery)</option>
+                <option value="Inspiring">Inspiring (Motivational / Deep)</option>
+                <option value="Intimate & Calm">Intimate & Calm (Storytelling / Nature)</option>
+                <option value="Dramatic">Dramatic (High Stakes)</option>
+              </select>
+            </div>
+
+            {/* Pacing / Speed */}
+            <div className="space-y-2">
+              <div className="flex justify-between text-xs text-zinc-300">
+                <span className="font-semibold">Narration Speed</span>
+                <span className="font-mono text-amber-400 font-bold">{speed.toFixed(2)}x</span>
+              </div>
+              <input
+                type="range"
+                min={0.6}
+                max={1.6}
+                step={0.02}
+                value={speed}
+                onChange={(e) => setSpeed(parseFloat(e.target.value))}
+                className="w-full h-1.5 bg-zinc-800 rounded-lg accent-amber-500 cursor-pointer"
+              />
+              <div className="flex justify-between text-[10px] text-zinc-500 font-mono">
+                <span>0.6x (Deliberate)</span>
+                <span>1.0x (Normal)</span>
+                <span>1.6x (Brisk)</span>
+              </div>
+            </div>
 
             {/* Paragraph Pause Duration */}
             <div className="space-y-2">

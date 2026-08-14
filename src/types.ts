@@ -32,6 +32,32 @@ export interface CustomVoice {
 
 export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
+export interface TTSDiagnostics {
+  provider_requested: string;
+  provider_executed: string;
+  voice_id: string;
+  voice_name: string;
+  is_custom_voice: boolean;
+  reference_audio_path?: string;
+  reference_audio_url?: string;
+  reference_audio_exists?: boolean;
+  reference_audio_duration_sec?: number;
+  reference_audio_size_bytes?: number;
+  fallback_used: boolean;
+  fallback_provider?: string;
+  final_synthesis_engine: string;
+  speed: number;
+  speaking_style: string;
+  temperature: number;
+  repetition_penalty: number;
+  language: string;
+  native_speed_applied: boolean;
+  native_temperature_applied: boolean;
+  native_repetition_penalty_applied: boolean;
+  post_processing_applied: string[];
+  exact_duration_seconds: number;
+}
+
 export interface TTSResult {
   job_id: string;
   voice_id: string;
@@ -50,6 +76,7 @@ export interface TTSResult {
   subtitle_srt_url?: string;
   subtitle_vtt_url?: string;
   generation_id?: string;
+  diagnostics?: TTSDiagnostics;
 }
 
 export interface GenerationRecord {
@@ -93,6 +120,7 @@ export interface TTSJob {
   updated_at: string;
   progress: number; // 0 to 100
   error_message?: string;
+  diagnostics?: TTSDiagnostics;
   result?: TTSResult;
 }
 

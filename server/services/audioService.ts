@@ -174,11 +174,95 @@ export class AudioService {
   }
 
   /**
+   * Calculates precise duration of a WAV buffer or file in seconds
+   */
+  public getWavDuration(input: Buffer | string): number {
+    try {
+      const buf = typeof input === 'string' ? fs.readFileSync(input) : input;
+      if (buf.length < 44) return 0;
+      const numChannels = buf.readUInt16LE(22) || 1;
+      const sampleRate = buf.readUInt32LE(24) || 24000;
+      const bitsPerSample = buf.readUInt16LE(34) || 16;
+      const dataSize = Math.max(0, buf.length - 44);
+      const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+      if (byteRate <= 0) return 0;
+      return dataSize / byteRate;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Generates FFmpeg atempo filter string (chains atempo for values outside 0.5-2.0)
+   */
+  private buildAtempoFilter(speed: number): string {
+    const clamped = Math.max(0.25, Math.min(4.0, speed));
+    let remaining = clamped;
+    const filters: string[] = [];
+
+    while (remaining > 2.0) {
+      filters.push('atempo=2.0');
+      remaining /= 2.0;
+    }
+    while (remaining < 0.5) {
+      filters.push('atempo=0.5');
+      remaining /= 0.5;
+    }
+    if (Math.abs(remaining - 1.0) > 0.005 || filters.length === 0) {
+      filters.push(`atempo=${remaining.toFixed(4)}`);
+    }
+
+    return filters.join(',');
+  }
+
+  /**
+   * Adjusts audio speed / playback rate with pitch preservation using FFmpeg
+   */
+  public async adjustAudioSpeed(
+    inputBuffer: Buffer,
+    speed: number = 1.0,
+    sampleRate: number = 24000
+  ): Promise<{ buffer: Buffer; duration: number }> {
+    const targetSpeed = Math.max(0.5, Math.min(2.0, Number(speed) || 1.0));
+    
+    // If speed is practically 1.0x, return original buffer
+    if (Math.abs(targetSpeed - 1.0) < 0.01) {
+      const dur = this.getWavDuration(inputBuffer);
+      return { buffer: inputBuffer, duration: dur };
+    }
+
+    const tmpIn = path.join(CONFIG.AUDIO_DIR, `tmp_speed_in_${Date.now()}_${Math.random().toString(36).substring(2, 6)}.wav`);
+    const tmpOut = path.join(CONFIG.AUDIO_DIR, `tmp_speed_out_${Date.now()}_${Math.random().toString(36).substring(2, 6)}.wav`);
+
+    try {
+      fs.writeFileSync(tmpIn, inputBuffer);
+      const filter = this.buildAtempoFilter(targetSpeed);
+      await execAsync(`ffmpeg -y -i "${tmpIn}" -filter:a "${filter}" -ar ${sampleRate} "${tmpOut}"`);
+
+      if (fs.existsSync(tmpOut) && fs.statSync(tmpOut).size > 44) {
+        const outBuf = fs.readFileSync(tmpOut);
+        const duration = this.getWavDuration(outBuf);
+        return { buffer: outBuf, duration };
+      }
+    } catch (err) {
+      console.warn(`[AudioService] FFmpeg speed adjustment failed (${targetSpeed}x):`, err);
+    } finally {
+      if (fs.existsSync(tmpIn)) try { fs.unlinkSync(tmpIn); } catch {}
+      if (fs.existsSync(tmpOut)) try { fs.unlinkSync(tmpOut); } catch {}
+    }
+
+    // Fallback if FFmpeg failed
+    const fallbackDur = this.getWavDuration(inputBuffer) / targetSpeed;
+    return { buffer: inputBuffer, duration: fallbackDur };
+  }
+
+  /**
    * Estimate duration in seconds from text length (roughly 150 words / minute)
    */
-  public estimateTextDuration(text: string): number {
+  public estimateTextDuration(text: string, speed: number = 1.0): number {
     const wordCount = text.trim().split(/\s+/).length;
-    const minutes = wordCount / 150;
+    const effectiveSpeed = Math.max(0.5, Number(speed) || 1.0);
+    const minutes = wordCount / (150 * effectiveSpeed);
     return Math.max(1, Math.round(minutes * 60));
   }
 }

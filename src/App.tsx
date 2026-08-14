@@ -173,6 +173,10 @@ export default function App() {
     language: string;
     provider: string;
     pause_duration_ms: number;
+    speed?: number;
+    speaking_style?: string;
+    temperature?: number;
+    repetition_penalty?: number;
   }): Promise<TTSResult> => {
     const res = await fetch('/api/tts/documentary', {
       method: 'POST',

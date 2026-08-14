@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import EventEmitter from 'events';
-import { TTSJob, TTSResult, WorkerInfo, JobStatus } from '../../src/types.js';
+import { TTSJob, TTSResult, WorkerInfo, JobStatus, VoiceProfile, TTSDiagnostics } from '../../src/types.js';
 import { CONFIG } from '../config.js';
 import { audioService } from './audioService.js';
 import { voiceService } from './voiceService.js';
@@ -126,7 +126,27 @@ class JobService extends EventEmitter {
     output_format?: 'wav' | 'mp3';
     is_documentary?: boolean;
   }): Promise<TTSJob> {
-    const voice = voiceService.getVoiceById(jobParams.voice_id);
+    const geminiBuiltinIds = new Set(['kore', 'fenrir', 'charon', 'zephyr', 'puck', 'aoede', 'leda', 'orpheus']);
+    const isGemini = jobParams.provider === 'gemini' || geminiBuiltinIds.has(jobParams.voice_id.toLowerCase().trim());
+
+    let voice: VoiceProfile | undefined;
+    if (isGemini) {
+      const vName = jobParams.voice_id.charAt(0).toUpperCase() + jobParams.voice_id.slice(1);
+      voice = {
+        id: jobParams.voice_id,
+        name: `${vName} (Gemini Cloud Voice)`,
+        engine: 'gemini',
+        description: `Built-in Gemini Cloud TTS character voice (${vName})`,
+        reference_audio_path: '',
+        reference_audio_url: '',
+        created_at: new Date().toISOString(),
+        language: jobParams.language || 'en',
+        metadata: { isGeminiVoice: true, isBuiltin: true }
+      };
+    } else {
+      voice = voiceService.getVoiceById(jobParams.voice_id);
+    }
+
     if (!voice) {
       throw new Error(`Voice profile '${jobParams.voice_id}' not found.`);
     }
@@ -146,12 +166,12 @@ class JobService extends EventEmitter {
       text: jobParams.text,
       processed_text: processedText,
       language: jobParams.language || voice.language || 'en',
-      provider: jobParams.provider || CONFIG.DEFAULT_VOICE_PROVIDER,
+      provider: jobParams.provider || (isGemini ? 'gemini' : (voice.engine || CONFIG.DEFAULT_VOICE_PROVIDER)),
       preset: jobParams.preset,
-      speed: jobParams.speed || 1.0,
+      speed: typeof jobParams.speed === 'number' && !isNaN(jobParams.speed) ? jobParams.speed : 1.0,
       speaking_style: jobParams.speaking_style || 'Neutral',
-      temperature: jobParams.temperature ?? 0.75,
-      repetition_penalty: jobParams.repetition_penalty ?? 2.0,
+      temperature: typeof jobParams.temperature === 'number' && !isNaN(jobParams.temperature) ? jobParams.temperature : 0.75,
+      repetition_penalty: typeof jobParams.repetition_penalty === 'number' && !isNaN(jobParams.repetition_penalty) ? jobParams.repetition_penalty : 2.0,
       output_format: jobParams.output_format || 'wav',
       is_documentary: !!jobParams.is_documentary,
       created_at: now,
@@ -192,7 +212,8 @@ class JobService extends EventEmitter {
     audioBuffer: Buffer,
     fileExtension: 'wav' | 'mp3' = 'wav',
     durationSec: number = 0,
-    sampleRate: number = 24000
+    sampleRate: number = 24000,
+    diagnostics?: TTSDiagnostics
   ): Promise<TTSResult> {
     const job = this.jobs.get(job_id);
     if (!job) throw new Error(`Job '${job_id}' not found`);
@@ -276,12 +297,16 @@ class JobService extends EventEmitter {
       subtitle_srt_url: subtitleSrtUrl,
       subtitle_vtt_url: subtitleVttUrl,
       generation_id: generationId,
+      diagnostics: diagnostics || job.diagnostics
     };
 
     job.status = 'completed';
     job.progress = 100;
     job.updated_at = new Date().toISOString();
     job.result = result;
+    if (diagnostics) {
+      job.diagnostics = diagnostics;
+    }
 
     this.saveJobs();
     this.emit(`job_completed_${job_id}`, result);

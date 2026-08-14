@@ -497,16 +497,21 @@ export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
         <div className="lg:col-span-4 space-y-5">
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900/90 p-5 shadow-xl space-y-5">
             
-            <div className="flex items-center space-x-2 border-b border-zinc-800 pb-3">
-              <Sliders className="h-4 w-4 text-amber-400" />
-              <h3 className="text-sm font-bold text-white uppercase tracking-wider">Acoustic Settings</h3>
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <div className="flex items-center space-x-2">
+                <Sliders className="h-4 w-4 text-amber-400" />
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">Acoustic Controls</h3>
+              </div>
+              <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-zinc-800 text-amber-400 font-bold">
+                {provider.toUpperCase()}
+              </span>
             </div>
 
             {/* Speaking Style / Emotion */}
             <div className="space-y-2">
-              <label className="text-xs font-medium text-zinc-300 flex justify-between">
+              <label className="text-xs font-semibold text-zinc-300 flex justify-between items-center">
                 <span>Speaking Style / Mood</span>
-                <span className="text-amber-400 font-mono text-[11px]">{speakingStyle}</span>
+                <span className="text-amber-400 font-mono text-[11px] font-bold">{speakingStyle}</span>
               </label>
               <select
                 value={speakingStyle}
@@ -514,28 +519,36 @@ export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
                   setSpeakingStyle(e.target.value);
                   setActivePresetId(null);
                 }}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs text-white focus:border-amber-500 focus:outline-none"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs text-white focus:border-amber-500 focus:outline-none font-medium"
               >
-                <option value="Dark & Gripping">Dark & Gripping (Crime / History)</option>
-                <option value="Authoritative">Authoritative (Documentary / Science)</option>
-                <option value="Energetic">Energetic (YouTube / Fast Paced)</option>
-                <option value="Inspiring">Inspiring (Motivational / Speeches)</option>
-                <option value="Intimate & Calm">Intimate & Calm (Story / Podcast)</option>
-                <option value="Neutral">Neutral / Standard</option>
+                <option value="Dark & Gripping">Dark & Gripping (Crime / History / Mystery)</option>
+                <option value="Authoritative">Authoritative (Documentary / Science / News)</option>
+                <option value="Energetic">Energetic (YouTube / Viral Shorts / Upbeat)</option>
+                <option value="Inspiring">Inspiring (Motivational / Deep Passion)</option>
+                <option value="Intimate & Calm">Intimate & Calm (Storytelling / Meditation / Podcast)</option>
+                <option value="Dramatic">Dramatic (Movie Trailer / High Stakes)</option>
+                <option value="Neutral">Neutral / Standard Narration</option>
               </select>
+              <p className="text-[10px] text-zinc-400 leading-tight">
+                {provider === 'gemini' 
+                  ? '⚡ Dynamically guides Gemini Flash natural-language emotional inflection and cadence.'
+                  : provider === 'f5-tts'
+                  ? '⚡ Conditions F5-TTS zero-shot flow matching with target emotional cadence.'
+                  : '⚡ Transferred through XTTS-v2 emotion conditioning.'}
+              </p>
             </div>
 
             {/* Speed Slider */}
             <div className="space-y-2">
               <div className="flex justify-between text-xs text-zinc-300">
-                <span>Pacing / Speed</span>
-                <span className="font-mono text-amber-400">{speed.toFixed(2)}x</span>
+                <span className="font-semibold">Pacing / Speed</span>
+                <span className="font-mono text-amber-400 font-bold">{speed.toFixed(2)}x</span>
               </div>
               <input
                 type="range"
                 min={0.5}
                 max={1.8}
-                step={0.05}
+                step={0.02}
                 value={speed}
                 onChange={(e) => {
                   setSpeed(parseFloat(e.target.value));
@@ -545,21 +558,24 @@ export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
               />
               <div className="flex justify-between text-[10px] text-zinc-500 font-mono">
                 <span>0.5x (Slow)</span>
-                <span>1.0x</span>
+                <span>1.0x (Normal)</span>
                 <span>1.8x (Fast)</span>
               </div>
+              <p className="text-[10px] text-zinc-400 leading-tight">
+                Physical audio time-stretch & pitch-preserved resampling ({((wordCount / (150 * speed)) * 60).toFixed(1)}s estimated).
+              </p>
             </div>
 
             {/* Temperature Slider */}
             <div className="space-y-2">
               <div className="flex justify-between text-xs text-zinc-300">
-                <span>Expressiveness / Temp</span>
-                <span className="font-mono text-amber-400">{temperature.toFixed(2)}</span>
+                <span className="font-semibold">Expressiveness / Temperature</span>
+                <span className="font-mono text-amber-400 font-bold">{temperature.toFixed(2)}</span>
               </div>
               <input
                 type="range"
                 min={0.1}
-                max={1.0}
+                max={1.2}
                 step={0.05}
                 value={temperature}
                 onChange={(e) => {
@@ -568,39 +584,64 @@ export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
                 }}
                 className="w-full h-1.5 bg-zinc-800 rounded-lg accent-amber-500 cursor-pointer"
               />
-              <p className="text-[10px] text-zinc-500">Lower values create steady cadence; higher values add inflection dynamics.</p>
+              <p className="text-[10px] text-zinc-400 leading-tight">
+                {provider === 'gemini'
+                  ? 'Modulates Gemini sampling temperature & emotional inflection range.'
+                  : provider === 'xtts'
+                  ? 'Controls XTTS-v2 acoustic sampling variance.'
+                  : 'Modulates neural flow-matching variance.'}
+              </p>
             </div>
 
-            {/* Repetition Penalty Slider */}
-            <div className="space-y-2">
-              <div className="flex justify-between text-xs text-zinc-300">
-                <span>Repetition Penalty</span>
-                <span className="font-mono text-amber-400">{repetitionPenalty.toFixed(1)}</span>
+            {/* Repetition Penalty Slider (Engine-aware) */}
+            <div className={`space-y-2 rounded-xl p-3 border transition ${
+              provider === 'xtts'
+                ? 'border-zinc-800 bg-zinc-950/40'
+                : 'border-zinc-800/40 bg-zinc-950/20 opacity-60'
+            }`}>
+              <div className="flex justify-between text-xs text-zinc-300 items-center">
+                <span className="font-semibold flex items-center space-x-1.5">
+                  <span>Repetition Penalty</span>
+                  {provider !== 'xtts' && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">
+                      XTTS-v2 only
+                    </span>
+                  )}
+                </span>
+                <span className="font-mono text-amber-400 font-bold">{repetitionPenalty.toFixed(1)}</span>
               </div>
               <input
                 type="range"
                 min={1.0}
                 max={5.0}
                 step={0.1}
+                disabled={provider !== 'xtts'}
                 value={repetitionPenalty}
                 onChange={(e) => {
                   setRepetitionPenalty(parseFloat(e.target.value));
                   setActivePresetId(null);
                 }}
-                className="w-full h-1.5 bg-zinc-800 rounded-lg accent-amber-500 cursor-pointer"
+                className={`w-full h-1.5 bg-zinc-800 rounded-lg accent-amber-500 ${
+                  provider === 'xtts' ? 'cursor-pointer' : 'cursor-not-allowed opacity-40'
+                }`}
               />
+              <p className="text-[10px] text-zinc-500 leading-tight">
+                {provider === 'xtts'
+                  ? 'Prevents loops and stutter in autoregressive XTTS-v2 cloning.'
+                  : 'N/A for Gemini & F5-TTS (direct non-autoregressive speech synthesis).'}
+              </p>
             </div>
 
             {/* Output Format */}
             <div className="space-y-2 pt-2 border-t border-zinc-800">
-              <label className="text-xs font-medium text-zinc-300">Output Audio Format</label>
+              <label className="text-xs font-semibold text-zinc-300">Output Audio Format</label>
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={() => setOutputFormat('wav')}
-                  className={`rounded-xl border py-2 text-xs font-semibold transition ${
+                  className={`rounded-xl border py-2 text-xs font-bold transition ${
                     outputFormat === 'wav'
-                      ? 'border-amber-500 bg-amber-500/10 text-amber-400'
+                      ? 'border-amber-500 bg-amber-500/10 text-amber-400 shadow-sm shadow-amber-500/10'
                       : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:text-white'
                   }`}
                 >
@@ -609,9 +650,9 @@ export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
                 <button
                   type="button"
                   onClick={() => setOutputFormat('mp3')}
-                  className={`rounded-xl border py-2 text-xs font-semibold transition ${
+                  className={`rounded-xl border py-2 text-xs font-bold transition ${
                     outputFormat === 'mp3'
-                      ? 'border-amber-500 bg-amber-500/10 text-amber-400'
+                      ? 'border-amber-500 bg-amber-500/10 text-amber-400 shadow-sm shadow-amber-500/10'
                       : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:text-white'
                   }`}
                 >
