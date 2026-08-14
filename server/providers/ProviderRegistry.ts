@@ -11,6 +11,8 @@ class ProviderRegistry {
   constructor() {
     this.registerProvider(new XTTSProvider());
     this.registerProvider(new OpenVoiceProvider());
+    this.registerProvider(new GeminiProvider());
+
   }
 
   public registerProvider(provider: VoiceProvider): void {
