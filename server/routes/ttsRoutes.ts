@@ -16,7 +16,7 @@ router.post('/generate', async (req: Request, res: Response) => {
       voice_id,
       text,
       language,
-     provider = process.env.DEFAULT_VOICE_PROVIDER || 'gemini',
+      provider = process.env.DEFAULT_VOICE_PROVIDER || 'gemini',
       speed = 1.0,
       speaking_style = 'Neutral',
       temperature = 0.75,
