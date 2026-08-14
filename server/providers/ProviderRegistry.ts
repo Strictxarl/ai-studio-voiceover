@@ -1,6 +1,7 @@
 import { VoiceProvider } from './VoiceProvider.js';
 import { XTTSProvider } from './XTTSProvider.js';
 import { OpenVoiceProvider } from './OpenVoiceProvider.js';
+import { GeminiProvider } from './GeminiProvider.js';
 import { ProviderStatusInfo } from '../../src/types.js';
 
 class ProviderRegistry {
