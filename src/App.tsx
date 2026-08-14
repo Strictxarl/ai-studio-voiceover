@@ -1,19 +1,65 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Navbar } from './components/Navbar';
+import { Navbar, ActiveTabType } from './components/Navbar';
 import { WorkerStatusBanner } from './components/WorkerStatusBanner';
 import { VoiceoverPage } from './components/VoiceoverPage';
-import { VoiceClonerPage } from './components/VoiceClonerPage';
+import { MyVoicesPage } from './components/MyVoicesPage';
+import { ScriptWriterPage } from './components/ScriptWriterPage';
 import { DocumentaryPage } from './components/DocumentaryPage';
 import { HistoryPage } from './components/HistoryPage';
 import { SettingsWorkerPage } from './components/SettingsWorkerPage';
-import { VoiceProfile, TTSJob, TTSResult, WorkerInfo, ProviderStatusInfo } from './types';
+import { SharedGenerationPage } from './pages/SharedGenerationPage';
+import { VoiceProfile, TTSJob, TTSResult, WorkerInfo, ProviderStatusInfo, GeminiVoiceId } from './types';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'voiceover' | 'cloner' | 'documentary' | 'history' | 'settings'>('voiceover');
+  const [activeTab, setActiveTab] = useState<ActiveTabType>('voiceover');
   const [voices, setVoices] = useState<VoiceProfile[]>([]);
   const [jobs, setJobs] = useState<TTSJob[]>([]);
   const [workerInfo, setWorkerInfo] = useState<WorkerInfo | null>(null);
   const [providers, setProviders] = useState<ProviderStatusInfo[]>([]);
+  
+  // Public share routing detection
+  const getInitialShareId = () => {
+    const match = window.location.pathname.match(/^\/share\/([^/?#]+)/);
+    return match ? match[1] : null;
+  };
+  const [sharePageId, setSharePageId] = useState<string | null>(getInitialShareId());
+
+  // Listen to browser forward/back buttons
+  useEffect(() => {
+    const handlePopState = () => {
+      const match = window.location.pathname.match(/^\/share\/([^/?#]+)/);
+      setSharePageId(match ? match[1] : null);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const handleOpenSharePage = (jobId: string) => {
+    setSharePageId(jobId);
+    window.history.pushState({}, '', `/share/${jobId}`);
+  };
+
+  const handleBackToStudio = () => {
+    setSharePageId(null);
+    window.history.pushState({}, '', '/');
+    setActiveTab('voiceover');
+  };
+
+  // Inter-tab script transfer state
+  const [scriptPayload, setScriptPayload] = useState<{
+    text: string;
+    voiceId?: GeminiVoiceId;
+    preset?: string;
+  }>({
+    text: "History is filled with moments that changed the world forever. But sometimes, the most important stories are the ones we almost forgot.",
+    voiceId: 'kore',
+    preset: 'Dark History'
+  });
+
+  const [documentaryPayload, setDocumentaryPayload] = useState<{
+    text?: string;
+    voiceId?: GeminiVoiceId;
+  }>({});
 
   // Fetch initial data & worker/provider status
   const fetchVoices = useCallback(async () => {
@@ -73,7 +119,7 @@ export default function App() {
     const timeoutMs = 180000; // 3 minutes max
 
     while (Date.now() - startTime < timeoutMs) {
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, 1200));
       const res = await fetch(`/api/tts/status/${job_id}`);
       if (!res.ok) continue;
 
@@ -84,11 +130,11 @@ export default function App() {
       }
       if (data.status === 'failed') {
         fetchJobs();
-        throw new Error(data.error_message || 'Speech generation failed on GPU worker.');
+        throw new Error(data.error_message || 'Speech generation job failed.');
       }
     }
 
-    throw new Error('Speech generation timed out waiting for Colab GPU worker response.');
+    throw new Error('Speech generation timed out waiting for audio synthesis completion.');
   };
 
   // Generation Handler
@@ -97,6 +143,7 @@ export default function App() {
     text: string;
     language: string;
     provider: string;
+    preset?: string;
     speed: number;
     speaking_style: string;
     temperature: number;
@@ -124,6 +171,7 @@ export default function App() {
     voice_id: string;
     script: string;
     language: string;
+    provider: string;
     pause_duration_ms: number;
   }): Promise<TTSResult> => {
     const res = await fetch('/api/tts/documentary', {
@@ -194,7 +242,8 @@ export default function App() {
       voice_id: oldJob.voice_id,
       text: oldJob.text,
       language: oldJob.language,
-      provider: oldJob.provider || 'xtts',
+      provider: oldJob.provider || 'gemini',
+      preset: oldJob.preset,
       speed: oldJob.speed || 1.0,
       speaking_style: oldJob.speaking_style || 'Neutral',
       temperature: oldJob.temperature ?? 0.75,
@@ -202,6 +251,35 @@ export default function App() {
       output_format: oldJob.output_format || 'wav'
     });
   };
+
+  // Transfer from ScriptWriter to Voiceover
+  const handleSendToVoiceover = (script: string, suggestedVoice?: GeminiVoiceId, suggestedPreset?: string) => {
+    setScriptPayload({
+      text: script,
+      voiceId: suggestedVoice || 'kore',
+      preset: suggestedPreset || 'Dark History'
+    });
+    setActiveTab('voiceover');
+  };
+
+  // Transfer from ScriptWriter to Documentary
+  const handleSendToDocumentary = (script: string, suggestedVoice?: GeminiVoiceId) => {
+    setDocumentaryPayload({
+      text: script,
+      voiceId: suggestedVoice || 'kore'
+    });
+    setActiveTab('documentary');
+  };
+
+  // If user requested public share page directly
+  if (sharePageId) {
+    return (
+      <SharedGenerationPage
+        generationId={sharePageId}
+        onBackToStudio={handleBackToStudio}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans selection:bg-amber-500 selection:text-zinc-950">
@@ -212,7 +290,7 @@ export default function App() {
       {/* Main Body */}
       <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 space-y-6">
         
-        {/* Banner highlighting GPU worker status */}
+        {/* Banner highlighting engine status */}
         <WorkerStatusBanner
           workerInfo={workerInfo}
           onOpenSettings={() => setActiveTab('settings')}
@@ -223,16 +301,35 @@ export default function App() {
           <VoiceoverPage
             voices={voices}
             workerInfo={workerInfo}
+            initialScript={scriptPayload.text}
+            initialVoiceId={scriptPayload.voiceId}
+            initialPreset={scriptPayload.preset}
             onGenerate={handleGenerate}
             onUpdatePronunciation={handleUpdatePronunciation}
+            onOpenSharePage={handleOpenSharePage}
           />
         )}
 
-        {activeTab === 'cloner' && (
-          <VoiceClonerPage
+        {activeTab === 'my-voices' && (
+          <MyVoicesPage
             voices={voices}
-            onCreateVoice={handleCreateVoice}
-            onDeleteVoice={handleDeleteVoice}
+            onVoiceCreated={(newVoice) => {
+              setVoices(prev => [newVoice, ...prev.filter(v => v.id !== newVoice.id)]);
+            }}
+            onVoiceDeleted={(id) => {
+              setVoices(prev => prev.filter(v => v.id !== id));
+            }}
+            onSelectForStudio={(voiceId) => {
+              setScriptPayload(prev => ({ ...prev, voiceId: voiceId as any }));
+              setActiveTab('voiceover');
+            }}
+          />
+        )}
+
+        {activeTab === 'scriptwriter' && (
+          <ScriptWriterPage
+            onSendToVoiceover={handleSendToVoiceover}
+            onSendToDocumentary={handleSendToDocumentary}
           />
         )}
 
@@ -240,7 +337,10 @@ export default function App() {
           <DocumentaryPage
             voices={voices}
             workerInfo={workerInfo}
+            initialScript={documentaryPayload.text}
+            initialVoiceId={documentaryPayload.voiceId}
             onGenerateDocumentary={handleGenerateDocumentary}
+            onOpenSharePage={handleOpenSharePage}
           />
         )}
 
@@ -249,6 +349,7 @@ export default function App() {
             jobs={jobs}
             onRegenerate={handleRegenerate}
             onDeleteJob={handleDeleteJob}
+            onOpenSharePage={handleOpenSharePage}
           />
         )}
 

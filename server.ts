@@ -7,6 +7,15 @@ import ttsRoutes from './server/routes/ttsRoutes.js';
 import voiceRoutes from './server/routes/voiceRoutes.js';
 import workerRoutes from './server/routes/workerRoutes.js';
 import providerRoutes from './server/routes/providerRoutes.js';
+import generationRoutes from './server/routes/generationRoutes.js';
+import fs from 'fs';
+
+// Auto-create all storage paths on boot
+fs.mkdirSync(CONFIG.UPLOADS_DIR, { recursive: true });
+fs.mkdirSync(CONFIG.VOICES_DIR, { recursive: true });
+fs.mkdirSync(CONFIG.AUDIO_DIR, { recursive: true });
+fs.mkdirSync(CONFIG.SUBTITLES_DIR, { recursive: true });
+fs.mkdirSync(CONFIG.DATA_DIR, { recursive: true });
 
 async function startServer() {
   const app = express();
@@ -15,15 +24,19 @@ async function startServer() {
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-  // Static audio serving routes
+  // Static audio and subtitle serving routes
   app.use('/api/audio', express.static(CONFIG.AUDIO_DIR));
   app.use('/uploads', express.static(CONFIG.UPLOADS_DIR));
+  app.use('/uploads/subtitles', express.static(CONFIG.SUBTITLES_DIR));
 
   // Mount API routes
   app.use('/api/tts', ttsRoutes);
   app.use('/api/voices', voiceRoutes);
   app.use('/api/worker', workerRoutes);
   app.use('/api/voice/providers', providerRoutes);
+  app.use('/api/generations', generationRoutes);
+  app.use('/api/share', generationRoutes);
+  app.use('/api/export', generationRoutes);
 
   // Health check endpoint
   app.get('/api/health', (_req, res) => {

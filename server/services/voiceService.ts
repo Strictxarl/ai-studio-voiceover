@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { VoiceProfile } from '../../src/types.js';
+import { VoiceProfile, CustomVoice } from '../../src/types.js';
 import { CONFIG } from '../config.js';
 import { audioService } from './audioService.js';
 
@@ -18,7 +18,12 @@ class VoiceService {
       if (fs.existsSync(this.voicesFile)) {
         const data = fs.readFileSync(this.voicesFile, 'utf-8');
         const list: VoiceProfile[] = JSON.parse(data);
-        list.forEach(v => this.voices.set(v.id, v));
+        list.forEach(v => {
+          if (!v.engine) {
+            v.engine = v.metadata?.isCloned ? 'f5-tts' : 'f5-tts';
+          }
+          this.voices.set(v.id, v);
+        });
       }
     } catch (e) {
       console.error('Failed loading voice profiles:', e);
@@ -38,26 +43,57 @@ class VoiceService {
     if (this.voices.size === 0) {
       const defaultPresets: VoiceProfile[] = [
         {
-          id: 'preset_doc_narration',
-          name: 'Documentary Master Voice',
-          description: 'Deep, clear, cinematic documentary narration tone.',
-          reference_audio_path: path.join(CONFIG.VOICES_DIR, 'preset_doc.wav'),
-          reference_audio_url: '/api/voices/file/preset_doc.wav',
+          id: 'custom_yusuf_narrator',
+          name: 'Yusuf Narrator',
+          engine: 'f5-tts',
+          description: 'Deep, resonant cinematic voice with commanding presence and storytelling timbre.',
+          reference_audio_path: path.join(CONFIG.VOICES_DIR, 'yusuf_narrator.wav'),
+          reference_audio_url: '/api/voices/file/yusuf_narrator.wav',
           created_at: new Date().toISOString(),
           language: 'en',
           sample_rate: 24000,
           duration: 12,
           file_size: 576000,
+          pronunciation_dict: {},
+          metadata: { isCloned: true, isCustom: true, isPreset: true }
+        },
+        {
+          id: 'custom_deep_doc_voice',
+          name: 'Deep Documentary Voice',
+          engine: 'f5-tts',
+          description: 'Atmospheric, grave, and mysterious documentary narrator tone.',
+          reference_audio_path: path.join(CONFIG.VOICES_DIR, 'deep_documentary.wav'),
+          reference_audio_url: '/api/voices/file/deep_documentary.wav',
+          created_at: new Date().toISOString(),
+          language: 'en',
+          sample_rate: 24000,
+          duration: 14,
+          file_size: 672000,
           pronunciation_dict: {
-            'Yorùbá': 'Yoruba',
             'Babylon': 'Bab-i-lon',
             'Mesopotamia': 'Meso-po-tamia'
           },
-          metadata: { isPreset: true }
+          metadata: { isCloned: true, isCustom: true, isPreset: true }
         },
         {
-          id: 'preset_narration_female',
+          id: 'custom_podcast_intro',
+          name: 'Podcast Intro Voice',
+          engine: 'f5-tts',
+          description: 'Engaging, warm, radio-broadcast ready voice for intros and podcasts.',
+          reference_audio_path: path.join(CONFIG.VOICES_DIR, 'podcast_intro.wav'),
+          reference_audio_url: '/api/voices/file/podcast_intro.wav',
+          created_at: new Date().toISOString(),
+          language: 'en',
+          sample_rate: 24000,
+          duration: 10,
+          file_size: 480000,
+          pronunciation_dict: {},
+          metadata: { isCloned: true, isCustom: true, isPreset: true }
+        },
+        {
+          id: 'preset_doc_narration',
           name: 'Clara - Warm Storyteller',
+          engine: 'f5-tts',
           description: 'Warm, articulate, engaging storytelling voice.',
           reference_audio_path: path.join(CONFIG.VOICES_DIR, 'preset_clara.wav'),
           reference_audio_url: '/api/voices/file/preset_clara.wav',
@@ -67,7 +103,7 @@ class VoiceService {
           duration: 10,
           file_size: 480000,
           pronunciation_dict: {},
-          metadata: { isPreset: true }
+          metadata: { isPreset: true, isCloned: true }
         }
       ];
 
@@ -76,7 +112,6 @@ class VoiceService {
         const fileName = path.basename(preset.reference_audio_path);
         const fullPath = path.join(CONFIG.VOICES_DIR, fileName);
         if (!fs.existsSync(fullPath)) {
-          // Generate minimal valid WAV reference
           this.createMinimalWavFile(fullPath, 24000, 3);
         }
         this.voices.set(preset.id, preset);
@@ -121,6 +156,10 @@ class VoiceService {
     return Array.from(this.voices.values());
   }
 
+  public getCustomVoices(): VoiceProfile[] {
+    return Array.from(this.voices.values()).filter(v => v.engine === 'f5-tts' || v.metadata?.isCloned || v.metadata?.isCustom);
+  }
+
   public getVoiceById(id: string): VoiceProfile | undefined {
     return this.voices.get(id);
   }
@@ -130,7 +169,8 @@ class VoiceService {
     description: string,
     filename: string,
     language: string = 'en',
-    pronunciationDict?: Record<string, string>
+    pronunciationDict?: Record<string, string>,
+    engine: string = 'f5-tts'
   ): Promise<VoiceProfile> {
     const id = `voice_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const voicePath = path.join(CONFIG.VOICES_DIR, filename);
@@ -144,17 +184,19 @@ class VoiceService {
     const profile: VoiceProfile = {
       id,
       name,
+      engine: engine || 'f5-tts',
       description,
       reference_audio_path: voicePath,
       reference_audio_url: voiceUrl,
       created_at: new Date().toISOString(),
       language: language || 'en',
       sample_rate: 24000,
-      duration: 8,
+      duration: Math.max(3, Math.round(fileSize / (24000 * 2)) || 6),
       file_size: fileSize,
       pronunciation_dict: pronunciationDict || {},
       metadata: {
         isCloned: true,
+        isCustom: true,
         original_filename: filename
       }
     };
@@ -193,3 +235,4 @@ class VoiceService {
 }
 
 export const voiceService = new VoiceService();
+

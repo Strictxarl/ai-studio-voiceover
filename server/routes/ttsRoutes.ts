@@ -1,8 +1,13 @@
 import { Router, Request, Response } from 'express';
+import path from 'path';
+import fs from 'fs';
+import { GoogleGenAI } from '@google/genai';
 import { jobService } from '../services/jobService.js';
 import { providerRegistry } from '../providers/ProviderRegistry.js';
 import { voiceService } from '../services/voiceService.js';
 import { audioService } from '../services/audioService.js';
+import { CONFIG } from '../config.js';
+import { VoiceProfile } from '../../src/types.js';
 
 const router = Router();
 
@@ -15,8 +20,10 @@ router.post('/generate', async (req: Request, res: Response) => {
     const {
       voice_id,
       text,
+      title,
       language,
-      provider = process.env.DEFAULT_VOICE_PROVIDER || 'gemini',
+      provider: requestedProvider,
+      preset,
       speed = 1.0,
       speaking_style = 'Neutral',
       temperature = 0.75,
@@ -32,7 +39,38 @@ router.post('/generate', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Valid script text is required' });
     }
 
-    const voice = voiceService.getVoiceById(voice_id);
+    const geminiVoiceIds = ['kore', 'fenrir', 'charon', 'zephyr', 'puck'];
+    let voice = voiceService.getVoiceById(voice_id);
+    
+    // Determine provider automatically based on voice profile if not explicitly supplied
+    let provider = requestedProvider;
+    if (!provider) {
+      if (geminiVoiceIds.includes(voice_id.toLowerCase())) {
+        provider = 'gemini';
+      } else if (voice?.engine) {
+        provider = voice.engine;
+      } else if (voice?.metadata?.isCloned || voice?.metadata?.isCustom) {
+        provider = 'f5-tts';
+      } else {
+        provider = process.env.DEFAULT_VOICE_PROVIDER || 'gemini';
+      }
+    }
+
+    if (!voice && (provider === 'gemini' || geminiVoiceIds.includes(voice_id.toLowerCase()))) {
+      const vName = voice_id.charAt(0).toUpperCase() + voice_id.slice(1);
+      voice = {
+        id: voice_id,
+        name: `${vName} (Gemini Studio Voice)`,
+        engine: 'gemini',
+        description: `High-fidelity expressive voice character (${vName})`,
+        reference_audio_path: '',
+        reference_audio_url: '',
+        created_at: new Date().toISOString(),
+        language: language || 'en',
+        metadata: { isGeminiVoice: true }
+      };
+    }
+
     if (!voice) {
       return res.status(404).json({ error: `Voice profile '${voice_id}' not found` });
     }
@@ -41,8 +79,10 @@ router.post('/generate', async (req: Request, res: Response) => {
     const job = await jobService.createJob({
       voice_id,
       text: text.trim(),
+      title,
       language: language || voice.language || 'en',
       provider,
+      preset,
       speed: Number(speed) || 1.0,
       speaking_style,
       temperature: Number(temperature) || 0.75,
@@ -64,6 +104,7 @@ router.post('/generate', async (req: Request, res: Response) => {
       message: 'TTS Generation job enqueued successfully',
       job_id: job.job_id,
       status: job.status,
+      provider: job.provider,
       estimated_duration_sec: audioService.estimateTextDuration(job.text),
       created_at: job.created_at
     });
@@ -147,22 +188,44 @@ router.delete('/history/:job_id', (req: Request, res: Response) => {
  */
 router.post('/documentary', async (req: Request, res: Response) => {
   try {
-    const { voice_id, script, language, provider = 'xtts', pause_duration_ms = 500 } = req.body;
+    const {
+      voice_id,
+      script,
+      language,
+      provider = process.env.DEFAULT_VOICE_PROVIDER || 'gemini',
+      pause_duration_ms = 500
+    } = req.body;
 
     if (!voice_id || !script) {
       return res.status(400).json({ error: 'voice_id and script are required' });
     }
 
-    const voice = voiceService.getVoiceById(voice_id);
+    let voice = voiceService.getVoiceById(voice_id);
+    if (!voice && provider === 'gemini') {
+      const vName = voice_id.charAt(0).toUpperCase() + voice_id.slice(1);
+      voice = {
+        id: voice_id,
+        name: `${vName} (Gemini Studio Voice)`,
+        description: `High-fidelity expressive voice character (${vName})`,
+        reference_audio_path: '',
+        reference_audio_url: '',
+        created_at: new Date().toISOString(),
+        language: language || 'en',
+        metadata: { isGeminiVoice: true }
+      };
+    }
+
     if (!voice) {
       return res.status(404).json({ error: `Voice profile '${voice_id}' not found` });
     }
 
-    const worker = jobService.getOnlineWorker();
-    if (!worker) {
-      return res.status(503).json({
-        error: 'Free GPU worker offline. Please connect your Google Colab GPU notebook worker.'
-      });
+    if (provider === 'xtts') {
+      const worker = jobService.getOnlineWorker();
+      if (!worker) {
+        return res.status(503).json({
+          error: 'XTTS voice cloning requires the Google Colab GPU worker. Switch provider to Gemini for instant cloud generation, or connect your Colab notebook.'
+        });
+      }
     }
 
     const chunks = audioService.splitDocumentaryScript(script);
@@ -175,6 +238,8 @@ router.post('/documentary', async (req: Request, res: Response) => {
       provider,
       is_documentary: true
     });
+    masterJob.chunks_total = chunks.length;
+    masterJob.chunks_completed = 0;
 
     res.status(202).json({
       message: 'Documentary mode job started',
@@ -201,19 +266,23 @@ router.post('/documentary', async (req: Request, res: Response) => {
           const result = await selectedProvider.processJob(chunkJob, voice);
           const wavPath = `${result.job_id}.wav`;
           chunkResults.push(wavPath);
+
+          masterJob.chunks_completed = i + 1;
+          masterJob.progress = Math.round(((i + 1) / chunks.length) * 90);
         }
+
+        masterJob.progress = 95;
 
         // Concatenate all chunks
         const finalWavFileName = `${masterJob.job_id}.wav`;
-        const finalWavPath = require('path').join(require('../config.js').CONFIG.AUDIO_DIR, finalWavFileName);
+        const finalWavPath = path.join(CONFIG.AUDIO_DIR, finalWavFileName);
         
         await audioService.concatenateWavFiles(
-          chunkResults.map(f => require('path').join(require('../config.js').CONFIG.AUDIO_DIR, f)),
+          chunkResults.map(f => path.join(CONFIG.AUDIO_DIR, f)),
           finalWavPath,
-          Number(pause_duration_ms) || 500
+          Number(pause_duration_ms) || 850
         );
 
-        const fs = require('fs');
         const audioBuf = fs.readFileSync(finalWavPath);
         await jobService.completeJobFromWorker(masterJob.job_id, audioBuf, 'wav');
       } catch (err: any) {
@@ -224,6 +293,96 @@ router.post('/documentary', async (req: Request, res: Response) => {
 
   } catch (error: any) {
     return res.status(500).json({ error: error.message || 'Failed processing documentary job' });
+  }
+});
+
+/**
+ * POST /api/tts/script-writer
+ * AI Script Generator using Gemini 2.5 Flash for cinematic scripts with hook, body, and CTA.
+ */
+router.post('/script-writer', async (req: Request, res: Response) => {
+  try {
+    const { topic, style = 'Documentary', duration = '1m', audience = '', notes = '' } = req.body;
+    if (!topic || typeof topic !== 'string' || topic.trim().length === 0) {
+      return res.status(400).json({ error: 'Topic is required for AI script generation' });
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: 'GEMINI_API_KEY is not configured on the server' });
+    }
+
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: { 'User-Agent': 'aistudio-build' }
+      }
+    });
+
+    const wordsMap: Record<string, number> = {
+      '30s': 75,
+      '1m': 150,
+      '3m': 450,
+      '5m': 750,
+      '10m': 1500
+    };
+    const targetWordCount = wordsMap[duration] || 150;
+
+    const prompt = `You are a master cinematic screenwriter, documentary director, and voiceover copywriter.
+Generate an immersive, highly engaging voiceover narration script.
+
+Topic: ${topic}
+Style: ${style}
+Target Duration: ${duration} (approx ${targetWordCount} words)
+${audience ? `Target Audience: ${audience}` : ''}
+${notes ? `Special Creative Notes: ${notes}` : ''}
+
+Strict Structure:
+1. Hook: A jaw-dropping opening line or paragraph (0-5s) that immediately hooks listeners.
+2. Main Body: Rich narrative paragraphs filled with vivid sensory details, rhythmic storytelling, and dramatic tension.
+3. Cliffhanger/CTA: A memorable punchy climax, thought-provoking final question, or closing call to action.
+
+Return your response strictly as JSON with this exact schema:
+{
+  "title": "Short compelling title",
+  "hook": "Opening hook text",
+  "body": "Main narration body paragraphs separated by double newlines",
+  "cta": "Closing punchline or CTA",
+  "full_script": "The complete merged script ready for audio synthesis",
+  "suggested_gemini_voice": "kore",
+  "suggested_preset": "Dark History",
+  "word_count": 145,
+  "estimated_duration_sec": 60
+}
+
+Note for suggested_gemini_voice:
+- "kore" for Dark History, Deep documentary, Mystical
+- "fenrir" for Powerful, Deep male, Epic Motivational
+- "charon" for Movie trailer, Intense drama, Breaking investigative
+- "zephyr" for Calm storytelling, Meditative, Podcast
+- "puck" for Energetic YouTube, Fast-paced tech, Cheerful`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: [{ parts: [{ text: prompt }] }],
+      config: {
+        responseMimeType: 'application/json',
+      }
+    });
+
+    const raw = response.text || '{}';
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      const clean = raw.replace(/```json/g, '').replace(/```/g, '').trim();
+      data = JSON.parse(clean);
+    }
+
+    return res.json(data);
+  } catch (err: any) {
+    console.error('AI Script Generator failed:', err);
+    return res.status(500).json({ error: err.message || 'Failed generating AI script' });
   }
 });
 

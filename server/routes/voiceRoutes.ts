@@ -34,6 +34,85 @@ const upload = multer({
 });
 
 /**
+ * POST /api/voices/custom
+ * Upload reference audio & register custom cloned voice (F5-TTS)
+ */
+router.post('/custom', upload.fields([{ name: 'reference_audio', maxCount: 1 }, { name: 'audio', maxCount: 1 }, { name: 'file', maxCount: 1 }]), async (req: Request, res: Response) => {
+  const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+  const uploadedFile = req.file || files?.reference_audio?.[0] || files?.audio?.[0] || files?.file?.[0];
+
+  try {
+    if (!uploadedFile) {
+      return res.status(400).json({ error: 'Audio reference file (.wav, .mp3, .m4a) is required' });
+    }
+
+    const { name, description = '', language = 'en', pronunciation_dict, engine = 'f5-tts' } = req.body;
+
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
+      if (fs.existsSync(uploadedFile.path)) fs.unlinkSync(uploadedFile.path);
+      return res.status(400).json({ error: 'Voice name is required' });
+    }
+
+    let parsedDict: Record<string, string> = {};
+    if (pronunciation_dict) {
+      try {
+        parsedDict = typeof pronunciation_dict === 'string' ? JSON.parse(pronunciation_dict) : pronunciation_dict;
+      } catch (e) {
+        console.warn('Failed parsing pronunciation dict JSON:', e);
+      }
+    }
+
+    const profile = await voiceService.createVoiceProfile(
+      name.trim(),
+      description.trim(),
+      uploadedFile.filename,
+      language,
+      parsedDict,
+      engine || 'f5-tts'
+    );
+
+    return res.status(201).json({
+      message: 'Custom cloned voice saved successfully',
+      id: profile.id,
+      name: profile.name,
+      engine: profile.engine || 'f5-tts',
+      reference_audio_path: profile.reference_audio_path,
+      reference_audio_url: profile.reference_audio_url,
+      created_at: profile.created_at,
+      voice: profile
+    });
+  } catch (error: any) {
+    if (uploadedFile && fs.existsSync(uploadedFile.path)) {
+      try { fs.unlinkSync(uploadedFile.path); } catch (e) {}
+    }
+    return res.status(500).json({ error: error.message || 'Failed creating custom cloned voice' });
+  }
+});
+
+/**
+ * GET /api/voices/custom
+ * Returns all custom cloned voices
+ */
+router.get('/custom', (_req: Request, res: Response) => {
+  const customVoices = voiceService.getCustomVoices();
+  return res.json(customVoices);
+});
+
+/**
+ * DELETE /api/voices/custom/:id
+ */
+router.delete('/custom/:id', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const deleted = voiceService.deleteVoice(id);
+
+  if (!deleted) {
+    return res.status(404).json({ error: `Custom voice '${id}' not found` });
+  }
+
+  return res.json({ message: `Custom voice '${id}' deleted successfully` });
+});
+
+/**
  * POST /api/voices
  * Upload audio & create voice profile
  */
@@ -43,7 +122,7 @@ router.post('/', upload.single('reference_audio'), async (req: Request, res: Res
       return res.status(400).json({ error: 'Audio reference file is required' });
     }
 
-    const { name, description = '', language = 'en', pronunciation_dict } = req.body;
+    const { name, description = '', language = 'en', pronunciation_dict, engine = 'f5-tts' } = req.body;
 
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
       // Cleanup uploaded file if validation fails
@@ -65,7 +144,8 @@ router.post('/', upload.single('reference_audio'), async (req: Request, res: Res
       description.trim(),
       req.file.filename,
       language,
-      parsedDict
+      parsedDict,
+      engine
     );
 
     return res.status(201).json({

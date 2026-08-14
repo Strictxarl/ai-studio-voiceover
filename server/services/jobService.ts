@@ -5,6 +5,8 @@ import { TTSJob, TTSResult, WorkerInfo, JobStatus } from '../../src/types.js';
 import { CONFIG } from '../config.js';
 import { audioService } from './audioService.js';
 import { voiceService } from './voiceService.js';
+import { subtitleService } from './subtitleService.js';
+import { generationRepository } from './generationRepository.js';
 
 class JobService extends EventEmitter {
   private jobsFile = path.join(CONFIG.UPLOADS_DIR, 'jobs.json');
@@ -113,8 +115,10 @@ class JobService extends EventEmitter {
   public async createJob(jobParams: {
     voice_id: string;
     text: string;
+    title?: string;
     language?: string;
     provider?: string;
+    preset?: string;
     speed?: number;
     speaking_style?: string;
     temperature?: number;
@@ -138,10 +142,12 @@ class JobService extends EventEmitter {
       status: 'pending',
       voice_id: voice.id,
       voice_name: voice.name,
+      title: jobParams.title,
       text: jobParams.text,
       processed_text: processedText,
       language: jobParams.language || voice.language || 'en',
       provider: jobParams.provider || CONFIG.DEFAULT_VOICE_PROVIDER,
+      preset: jobParams.preset,
       speed: jobParams.speed || 1.0,
       speaking_style: jobParams.speaking_style || 'Neutral',
       temperature: jobParams.temperature ?? 0.75,
@@ -214,6 +220,44 @@ class JobService extends EventEmitter {
     const sha256 = await audioService.getFileSha256(outputPath);
     const calculatedDuration = durationSec > 0 ? durationSec : audioService.estimateTextDuration(job.text);
 
+    // 1. Generate Subtitles (SRT + VTT with sentence segmentation & Whisper / smart timing)
+    let subtitleSrtUrl: string | undefined = undefined;
+    let subtitleVttUrl: string | undefined = undefined;
+    try {
+      const subResult = await subtitleService.generateSubtitles(
+        outputPath,
+        job.job_id,
+        job.text,
+        calculatedDuration
+      );
+      subtitleSrtUrl = subResult.srtUrl;
+      subtitleVttUrl = subResult.vttUrl;
+    } catch (subErr) {
+      console.error(`[Subtitles] Failed generating subtitles for job ${job_id}:`, subErr);
+    }
+
+    // 2. Persist to SQLite Database via Prisma
+    let generationId: string | undefined = undefined;
+    try {
+      const genRecord = await generationRepository.createGeneration({
+        jobId: job.job_id,
+        title: job.title || (job.text.length > 50 ? `${job.text.substring(0, 47)}...` : job.text),
+        script: job.text,
+        provider: job.provider,
+        voiceId: job.voice_id,
+        preset: job.preset,
+        language: job.language,
+        audioWavUrl: wavUrl,
+        audioMp3Url: mp3Url,
+        subtitleSrtUrl: subtitleSrtUrl,
+        subtitleVttUrl: subtitleVttUrl,
+        durationSeconds: calculatedDuration,
+      });
+      generationId = genRecord.id;
+    } catch (dbErr) {
+      console.error(`[Database] Failed to persist generation to SQLite for job ${job_id}:`, dbErr);
+    }
+
     const result: TTSResult = {
       job_id,
       voice_id: job.voice_id,
@@ -228,7 +272,10 @@ class JobService extends EventEmitter {
       created_at: new Date().toISOString(),
       audio_url: job.output_format === 'mp3' && mp3Url ? mp3Url : wavUrl,
       wav_url: wavUrl,
-      mp3_url: mp3Url
+      mp3_url: mp3Url,
+      subtitle_srt_url: subtitleSrtUrl,
+      subtitle_vtt_url: subtitleVttUrl,
+      generation_id: generationId,
     };
 
     job.status = 'completed';
@@ -301,14 +348,26 @@ class JobService extends EventEmitter {
 
   public deleteJob(job_id: string): boolean {
     const job = this.jobs.get(job_id);
-    if (!job) return false;
+    if (!job) {
+      // Still try deleting from generation repository if present
+      generationRepository.deleteGeneration(job_id).catch(() => {});
+      return false;
+    }
 
     if (job.result) {
       const wavPath = path.join(CONFIG.AUDIO_DIR, `${job_id}.wav`);
       const mp3Path = path.join(CONFIG.AUDIO_DIR, `${job_id}.mp3`);
+      const srtPath = path.join(CONFIG.SUBTITLES_DIR, `${job_id}.srt`);
+      const vttPath = path.join(CONFIG.SUBTITLES_DIR, `${job_id}.vtt`);
       if (fs.existsSync(wavPath)) try { fs.unlinkSync(wavPath); } catch (e) {}
       if (fs.existsSync(mp3Path)) try { fs.unlinkSync(mp3Path); } catch (e) {}
+      if (fs.existsSync(srtPath)) try { fs.unlinkSync(srtPath); } catch (e) {}
+      if (fs.existsSync(vttPath)) try { fs.unlinkSync(vttPath); } catch (e) {}
     }
+
+    generationRepository.deleteGeneration(job_id).catch(err => {
+      console.error(`Failed deleting generation record ${job_id} from SQLite:`, err);
+    });
 
     this.jobs.delete(job_id);
     this.saveJobs();

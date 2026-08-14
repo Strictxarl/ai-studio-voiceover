@@ -1,6 +1,7 @@
 export interface VoiceProfile {
   id: string;
   name: string;
+  engine?: 'f5-tts' | 'gemini' | 'xtts' | 'openvoice' | string;
   description?: string;
   reference_audio_path: string;
   reference_audio_url: string;
@@ -9,6 +10,22 @@ export interface VoiceProfile {
   sample_rate?: number;
   duration?: number;
   file_size?: number;
+  pronunciation_dict?: Record<string, string>;
+  metadata?: Record<string, any>;
+}
+
+export interface CustomVoice {
+  id: string;
+  name: string;
+  engine: 'f5-tts' | string;
+  reference_audio_path: string;
+  reference_audio_url: string;
+  created_at: string;
+  language?: string;
+  description?: string;
+  duration?: number;
+  file_size?: number;
+  sample_rate?: number;
   pronunciation_dict?: Record<string, string>;
   metadata?: Record<string, any>;
 }
@@ -30,6 +47,27 @@ export interface TTSResult {
   audio_url: string;
   wav_url?: string;
   mp3_url?: string;
+  subtitle_srt_url?: string;
+  subtitle_vtt_url?: string;
+  generation_id?: string;
+}
+
+export interface GenerationRecord {
+  id: string;
+  jobId: string;
+  title?: string | null;
+  script: string;
+  provider: string;
+  voiceId: string;
+  preset?: string | null;
+  language: string;
+  audioWavUrl?: string | null;
+  audioMp3Url?: string | null;
+  subtitleSrtUrl?: string | null;
+  subtitleVttUrl?: string | null;
+  durationSeconds?: number | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface TTSJob {
@@ -37,10 +75,12 @@ export interface TTSJob {
   status: JobStatus;
   voice_id: string;
   voice_name: string;
+  title?: string;
   text: string;
   processed_text?: string;
   language: string;
   provider: string;
+  preset?: string;
   speed: number;
   speaking_style?: string;
   temperature: number;
@@ -90,3 +130,49 @@ export interface PronunciationRule {
   term: string;
   replacement: string;
 }
+
+export type GeminiVoiceId = 'kore' | 'fenrir' | 'charon' | 'zephyr' | 'puck';
+
+export interface GeminiVoicePreset {
+  id: GeminiVoiceId;
+  name: string;
+  gender: 'female' | 'male';
+  tone: string;
+  useCase: string;
+  previewDescription: string;
+}
+
+export interface CinematicPreset {
+  id: string;
+  name: string;
+  description: string;
+  provider: 'gemini' | 'xtts' | 'openvoice';
+  voice: GeminiVoiceId | string;
+  speed: number;
+  temperature: number;
+  repetition_penalty: number;
+  pause_duration_ms: number;
+  speaking_style: string;
+  iconName?: string;
+}
+
+export interface ScriptWriterRequest {
+  topic: string;
+  style: 'Documentary' | 'Dark History' | 'YouTube Short' | 'Podcast' | 'Motivational';
+  duration: '30s' | '1m' | '3m' | '5m' | '10m';
+  audience?: string;
+  notes?: string;
+}
+
+export interface ScriptWriterResult {
+  title: string;
+  hook: string;
+  body: string;
+  cta: string;
+  full_script: string;
+  suggested_gemini_voice: GeminiVoiceId;
+  suggested_preset: string;
+  word_count: number;
+  estimated_duration_sec: number;
+}
+

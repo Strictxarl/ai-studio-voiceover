@@ -2,17 +2,18 @@ import { VoiceProvider } from './VoiceProvider.js';
 import { XTTSProvider } from './XTTSProvider.js';
 import { OpenVoiceProvider } from './OpenVoiceProvider.js';
 import { GeminiProvider } from './GeminiProvider.js';
+import { F5TTSProvider } from './F5TTSProvider.js';
 import { ProviderStatusInfo } from '../../src/types.js';
 
 class ProviderRegistry {
   private providers: Map<string, VoiceProvider> = new Map();
-  private defaultProviderId: string = process.env.DEFAULT_VOICE_PROVIDER || 'xtts';
+  private defaultProviderId: string = process.env.DEFAULT_VOICE_PROVIDER || 'gemini';
 
   constructor() {
+    this.registerProvider(new GeminiProvider());
+    this.registerProvider(new F5TTSProvider());
     this.registerProvider(new XTTSProvider());
     this.registerProvider(new OpenVoiceProvider());
-    this.registerProvider(new GeminiProvider());
-
   }
 
   public registerProvider(provider: VoiceProvider): void {

@@ -1,17 +1,23 @@
-import React, { useState } from 'react';
-import { Sparkles, Sliders, Globe, Volume2, BookOpen, AlertCircle, RefreshCw, Download, CheckCircle2 } from 'lucide-react';
-import { VoiceProfile, TTSJob, TTSResult, WorkerInfo } from '../types';
+import React, { useState, useEffect } from 'react';
+import { Sparkles, Sliders, Globe, Volume2, BookOpen, AlertCircle, RefreshCw, CheckCircle2, Zap, Bookmark, SlidersHorizontal, User } from 'lucide-react';
+import { VoiceProfile, TTSJob, TTSResult, WorkerInfo, GeminiVoiceId } from '../types';
 import { AudioPlayer } from './AudioPlayer';
 import { PronunciationModal } from './PronunciationModal';
+import { ProviderSelector } from './ProviderSelector';
+import { GEMINI_VOICES, CINEMATIC_PRESETS } from '../constants/presets';
 
 interface VoiceoverPageProps {
   voices: VoiceProfile[];
   workerInfo: WorkerInfo | null;
+  initialScript?: string;
+  initialVoiceId?: string;
+  initialPreset?: string;
   onGenerate: (params: {
     voice_id: string;
     text: string;
     language: string;
     provider: string;
+    preset?: string;
     speed: number;
     speaking_style: string;
     temperature: number;
@@ -19,6 +25,7 @@ interface VoiceoverPageProps {
     output_format: 'wav' | 'mp3';
   }) => Promise<TTSResult>;
   onUpdatePronunciation: (voiceId: string, dict: Record<string, string>) => void;
+  onOpenSharePage?: (jobId: string) => void;
 }
 
 const SUPPORTED_LANGUAGES = [
@@ -44,18 +51,26 @@ const SUPPORTED_LANGUAGES = [
 export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
   voices,
   workerInfo,
+  initialScript,
+  initialVoiceId,
+  initialPreset,
   onGenerate,
-  onUpdatePronunciation
+  onUpdatePronunciation,
+  onOpenSharePage,
 }) => {
   const [script, setScript] = useState<string>(
-    "History is filled with moments that changed the world forever. But sometimes, the most important stories are the ones we almost forgot."
+    initialScript || "History is filled with moments that changed the world forever. But sometimes, the most important stories are the ones we almost forgot."
   );
-  const [selectedVoiceId, setSelectedVoiceId] = useState<string>(voices[0]?.id || 'preset_doc_narration');
+  const [provider, setProvider] = useState<string>('gemini');
+  const [selectedGeminiVoice, setSelectedGeminiVoice] = useState<GeminiVoiceId>('kore');
+  const [selectedCustomVoiceId, setSelectedCustomVoiceId] = useState<string>(voices[0]?.id || 'preset_doc_narration');
+  const [activePresetId, setActivePresetId] = useState<string | null>('dark-history');
+  
   const [language, setLanguage] = useState<string>('en');
-  const [speed, setSpeed] = useState<number>(1.0);
-  const [speakingStyle, setSpeakingStyle] = useState<string>('Neutral');
-  const [temperature, setTemperature] = useState<number>(0.75);
-  const [repetitionPenalty, setRepetitionPenalty] = useState<number>(2.0);
+  const [speed, setSpeed] = useState<number>(0.92);
+  const [speakingStyle, setSpeakingStyle] = useState<string>('Dark & Gripping');
+  const [temperature, setTemperature] = useState<number>(0.55);
+  const [repetitionPenalty, setRepetitionPenalty] = useState<number>(1.7);
   const [outputFormat, setOutputFormat] = useState<'wav' | 'mp3'>('wav');
 
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
@@ -66,11 +81,49 @@ export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
 
   const [isPronunciationModalOpen, setIsPronunciationModalOpen] = useState<boolean>(false);
 
-  const selectedVoice = voices.find(v => v.id === selectedVoiceId) || voices[0];
+  // Sync initial props when passed from ScriptWriterPage or My Voices
+  useEffect(() => {
+    if (initialScript) setScript(initialScript);
+    if (initialVoiceId) {
+      if (GEMINI_VOICES.some(v => v.id === initialVoiceId)) {
+        setSelectedGeminiVoice(initialVoiceId as GeminiVoiceId);
+        setProvider('gemini');
+      } else if (voices.some(v => v.id === initialVoiceId)) {
+        setSelectedCustomVoiceId(initialVoiceId);
+        setProvider('f5-tts');
+      }
+    }
+    if (initialPreset) {
+      const match = CINEMATIC_PRESETS.find(p => p.name.toLowerCase() === initialPreset.toLowerCase());
+      if (match) {
+        applyPreset(match.id);
+      }
+    }
+  }, [initialScript, initialVoiceId, initialPreset, voices]);
+
+  const selectedCustomVoice = voices.find(v => v.id === selectedCustomVoiceId) || voices[0];
+  const isGpuOnline = workerInfo && workerInfo.status !== 'offline';
 
   const charCount = script.length;
   const wordCount = script.trim().split(/\s+/).filter(Boolean).length;
-  const estDurationSec = Math.max(1, Math.round((wordCount / 150) * 60));
+  const estDurationSec = Math.max(1, Math.round((wordCount / (150 * speed)) * 60));
+
+  const applyPreset = (presetId: string) => {
+    const p = CINEMATIC_PRESETS.find(pr => pr.id === presetId);
+    if (!p) return;
+    setActivePresetId(presetId);
+    setSpeed(p.speed);
+    setTemperature(p.temperature);
+    setRepetitionPenalty(p.repetition_penalty);
+    setSpeakingStyle(p.speaking_style);
+
+    if (p.provider === 'gemini') {
+      setProvider('gemini');
+      if (GEMINI_VOICES.some(v => v.id === p.voice)) {
+        setSelectedGeminiVoice(p.voice as GeminiVoiceId);
+      }
+    }
+  };
 
   const handleGenerate = async () => {
     if (!script.trim()) {
@@ -78,20 +131,42 @@ export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
       return;
     }
 
+    if (provider === 'xtts' && !isGpuOnline) {
+      setError(
+        'XTTS voice cloning requires the Google Colab GPU worker. Switch to Gemini Flash or F5-TTS for instant voice generation, or connect your Colab notebook.'
+      );
+      return;
+    }
+
     setError(null);
     setIsGenerating(true);
-    setGenerationProgress(15);
-    setCurrentStep('Preprocessing script & applying phonetics...');
+    setGenerationProgress(20);
+    setCurrentStep(
+      provider === 'gemini'
+        ? `Preparing ${selectedGeminiVoice.toUpperCase()} voice with Gemini Flash Cloud TTS...`
+        : provider === 'f5-tts'
+        ? `Matching vocal profile with F5-TTS Neural Cloner...`
+        : 'Preprocessing script & applying custom voice profile...'
+    );
 
     try {
-      setGenerationProgress(35);
-      setCurrentStep('Dispatching job to Coqui XTTS-v2 GPU worker...');
+      setGenerationProgress(50);
+      setCurrentStep(
+        provider === 'gemini'
+          ? 'Synthesizing voiceover with Google Gemini Flash...'
+          : provider === 'f5-tts'
+          ? 'Generating flow-matching audio with F5-TTS engine...'
+          : 'Dispatching audio job to Coqui XTTS-v2 GPU worker...'
+      );
+
+      const effectiveVoiceId = provider === 'gemini' ? selectedGeminiVoice : selectedCustomVoiceId;
 
       const res = await onGenerate({
-        voice_id: selectedVoiceId,
+        voice_id: effectiveVoiceId,
         text: script,
         language,
-        provider: 'xtts',
+        provider,
+        preset: CINEMATIC_PRESETS.find(p => p.id === activePresetId)?.name || 'Documentary',
         speed,
         speaking_style: speakingStyle,
         temperature,
@@ -104,7 +179,11 @@ export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
       setResult(res);
     } catch (err: any) {
       console.error(err);
-      setError(err.message || 'Speech generation failed. Ensure GPU worker is online.');
+      if (provider === 'xtts') {
+        setError(err.message || 'Speech generation failed. Ensure GPU worker is online.');
+      } else {
+        setError(err.message || 'Speech generation failed. Please verify your settings.');
+      }
     } finally {
       setIsGenerating(false);
     }
@@ -116,19 +195,22 @@ export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
       {/* Page Title & Tagline */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight text-white font-display">AI Voiceover Studio</h2>
+          <h2 className="text-2xl font-bold tracking-tight text-white font-display flex items-center space-x-2">
+            <Sparkles className="h-6 w-6 text-amber-400" />
+            <span>Voiceover Studio</span>
+          </h2>
           <p className="text-xs text-zinc-400 mt-1">
-            Generate natural, cinematic speech with <strong className="text-amber-400">Coqui XTTS-v2</strong> voice cloning.
+            Produce cinema-grade narration with instant <strong className="text-amber-400">Gemini Flash Cloud TTS</strong> or zero-shot <strong className="text-amber-400">XTTS-v2</strong> voice cloning.
           </p>
         </div>
 
-        {selectedVoice && (
+        {provider === 'xtts' && selectedCustomVoice && (
           <button
             onClick={() => setIsPronunciationModalOpen(true)}
             className="flex items-center space-x-1.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2 text-xs font-semibold text-amber-400 hover:border-amber-500/40 hover:bg-zinc-850 transition"
           >
             <BookOpen className="h-4 w-4" />
-            <span>Pronunciation Rules ({Object.keys(selectedVoice.pronunciation_dict || {}).length})</span>
+            <span>Pronunciation Rules ({Object.keys(selectedCustomVoice.pronunciation_dict || {}).length})</span>
           </button>
         )}
       </div>
@@ -139,6 +221,52 @@ export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
         {/* Left Column: Script Editor & Controls */}
         <div className="lg:col-span-8 space-y-5">
           
+          {/* Engine Selector */}
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/90 p-5 shadow-xl space-y-3">
+            <ProviderSelector
+              selectedProvider={provider}
+              onSelectProvider={(p) => {
+                setProvider(p);
+                setError(null);
+              }}
+              workerInfo={workerInfo}
+            />
+          </div>
+
+          {/* Cinematic Presets Bar */}
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/90 p-4 shadow-xl space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-[11px] font-bold uppercase tracking-wider text-zinc-400 flex items-center space-x-1.5">
+                <Bookmark className="h-3.5 w-3.5 text-amber-400" />
+                <span>Cinematic Presets</span>
+              </label>
+              <span className="text-[10px] text-zinc-500">1-click acoustic tuning</span>
+            </div>
+
+            <div className="flex flex-wrap gap-2 pt-1">
+              {CINEMATIC_PRESETS.map((p) => {
+                const isActive = activePresetId === p.id;
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => applyPreset(p.id)}
+                    className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl border text-xs font-semibold transition ${
+                      isActive
+                        ? 'border-amber-500 bg-amber-500 text-zinc-950 shadow-md shadow-amber-500/20 font-bold'
+                        : 'border-zinc-800 bg-zinc-950/70 text-zinc-300 hover:border-zinc-700 hover:bg-zinc-950'
+                    }`}
+                  >
+                    <span>{p.name}</span>
+                    <span className={`text-[10px] opacity-80 ${isActive ? 'text-zinc-900 font-normal' : 'text-zinc-500'}`}>
+                      ({p.speed}x)
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {/* Text Area */}
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900/90 p-5 shadow-xl backdrop-blur-sm space-y-3">
             <div className="flex items-center justify-between">
@@ -157,49 +285,92 @@ export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
             <textarea
               rows={7}
               value={script}
-              onChange={(e) => setScript(e.target.value)}
-              placeholder="Paste or type your script here..."
-              className="w-full rounded-xl border border-zinc-800 bg-zinc-950 p-4 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500/80 focus:outline-none focus:ring-1 focus:ring-amber-500/50 resize-y"
+              onChange={(e) => {
+                setScript(e.target.value);
+                setActivePresetId(null);
+              }}
+              placeholder="Paste or type your voiceover script here..."
+              className="w-full rounded-xl border border-zinc-800 bg-zinc-950 p-4 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500/80 focus:outline-none focus:ring-1 focus:ring-amber-500/50 resize-y leading-relaxed"
             />
-
-            {/* Disclaimer Permission Note */}
-            <p className="text-[11px] text-zinc-500 italic flex items-center space-x-1">
-              <span>* Notice: Voice cloning must only be used for voices you own or have explicit permission to use.</span>
-            </p>
           </div>
 
-          {/* Quick Selectors Grid */}
+          {/* Voice Character Picker & Multilingual */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             
-            {/* Voice Profile Selector */}
-            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/90 p-4 shadow-lg space-y-2">
-              <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center justify-between">
-                <span>Voice Profile</span>
-                <span className="text-[10px] text-amber-400">{selectedVoice?.language.toUpperCase()}</span>
-              </label>
-              <select
-                value={selectedVoiceId}
-                onChange={(e) => setSelectedVoiceId(e.target.value)}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-xs text-white focus:border-amber-500 focus:outline-none"
-              >
-                {voices.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.name} {v.metadata?.isPreset ? '(Preset)' : '(Cloned)'}
-                  </option>
-                ))}
-              </select>
-              {selectedVoice && (
-                <p className="text-[11px] text-zinc-400 truncate pt-1">
-                  {selectedVoice.description || 'Reference clip stored for XTTS-v2 cloning.'}
-                </p>
-              )}
-            </div>
+            {/* Voice Selection Card */}
+            {provider === 'gemini' ? (
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/90 p-4 shadow-lg space-y-2">
+                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center justify-between">
+                  <span className="flex items-center space-x-1.5">
+                    <User className="h-3.5 w-3.5 text-amber-400" />
+                    <span>Gemini Studio Voice</span>
+                  </span>
+                  <span className="text-[10px] text-amber-400 uppercase font-mono">{selectedGeminiVoice}</span>
+                </label>
+
+                <select
+                  value={selectedGeminiVoice}
+                  onChange={(e) => {
+                    setSelectedGeminiVoice(e.target.value as GeminiVoiceId);
+                    setActivePresetId(null);
+                  }}
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-xs text-white focus:border-amber-500 focus:outline-none"
+                >
+                  {GEMINI_VOICES.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name} — {v.tone} ({v.gender})
+                    </option>
+                  ))}
+                </select>
+
+                {(() => {
+                  const curr = GEMINI_VOICES.find(v => v.id === selectedGeminiVoice);
+                  return curr ? (
+                    <p className="text-[11px] text-zinc-400 leading-relaxed pt-1">
+                      {curr.previewDescription}
+                    </p>
+                  ) : null;
+                })()}
+              </div>
+            ) : (
+              /* If F5-TTS or XTTS is selected: Show Cloned Voice Profiles with 🎤 icon */
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/90 p-4 shadow-lg space-y-2">
+                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center justify-between">
+                  <span className="flex items-center space-x-1.5">
+                    <span className="text-amber-400 text-sm">🎤</span>
+                    <span>{provider === 'f5-tts' ? 'F5-TTS Cloned Voice' : 'XTTS Reference Voice'}</span>
+                  </span>
+                  <span className="text-[10px] text-amber-400 uppercase font-mono">
+                    {provider.toUpperCase()}
+                  </span>
+                </label>
+                <select
+                  value={selectedCustomVoiceId}
+                  onChange={(e) => setSelectedCustomVoiceId(e.target.value)}
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-xs text-white focus:border-amber-500 focus:outline-none"
+                >
+                  {voices.map((v) => {
+                    const iconPrefix = v.name.startsWith('🎤') ? '' : '🎤 ';
+                    return (
+                      <option key={v.id} value={v.id}>
+                        {iconPrefix}{v.name} {v.metadata?.isPreset ? '(Library)' : '(Cloned)'}
+                      </option>
+                    );
+                  })}
+                </select>
+                {selectedCustomVoice && (
+                  <p className="text-[11px] text-zinc-400 truncate pt-1">
+                    {selectedCustomVoice.description || 'Reference voice profile loaded for neural cloning.'}
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* Language Selector */}
             <div className="rounded-2xl border border-zinc-800 bg-zinc-900/90 p-4 shadow-lg space-y-2">
               <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center space-x-1.5">
                 <Globe className="h-3.5 w-3.5 text-amber-400" />
-                <span>Multilingual Speech</span>
+                <span>Language / Accent</span>
               </label>
               <select
                 value={language}
@@ -213,7 +384,11 @@ export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
                 ))}
               </select>
               <p className="text-[11px] text-zinc-400 pt-1">
-                XTTS-v2 maintains speaker tone across all 17 supported languages.
+                {provider === 'gemini' 
+                  ? 'High-fidelity cinematic synthesis across 17+ languages.' 
+                  : provider === 'f5-tts'
+                  ? 'F5-TTS neural flow matching preserves vocal timbre across languages.'
+                  : 'XTTS-v2 maintains speaker voice identity cross-lingually.'}
               </p>
             </div>
 
@@ -234,7 +409,15 @@ export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
               ) : (
                 <>
                   <Sparkles className="h-5 w-5" />
-                  <span>GENERATE AI VOICEOVER</span>
+                  <span>
+                    GENERATE CINEMATIC VOICEOVER (
+                    {provider === 'gemini'
+                      ? `GEMINI ${selectedGeminiVoice.toUpperCase()}`
+                      : provider === 'f5-tts'
+                      ? `F5-TTS CLONING`
+                      : 'XTTS-V2'}
+                    )
+                  </span>
                 </>
               )}
             </button>
@@ -262,29 +445,29 @@ export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
               <div className="flex items-start space-x-2">
                 <AlertCircle className="h-4 w-4 text-red-400 shrink-0 mt-0.5" />
                 <div>
-                  <strong className="block font-semibold">Generation Error</strong>
+                  <strong className="block font-semibold">Generation Notice</strong>
                   <span>{error}</span>
                 </div>
               </div>
 
-              {error.toLowerCase().includes('worker') && (
+              {provider === 'xtts' && !isGpuOnline && (
                 <div className="rounded-lg border border-amber-500/30 bg-amber-950/40 p-3 space-y-2 text-amber-200">
                   <div className="font-semibold text-xs text-amber-300 flex items-center justify-between">
-                    <span>💡 How to connect your Colab GPU Worker:</span>
-                    <a
-                      href="/notebooks/xtts_colab_worker.ipynb"
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <span>💡 Options: Switch to Gemini Cloud or connect Colab:</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProvider('gemini');
+                        setError(null);
+                      }}
                       className="text-[11px] underline font-bold text-amber-400 hover:text-amber-300"
                     >
-                      Download / Open Notebook ↗
-                    </a>
+                      Switch to Gemini Flash ↗
+                    </button>
                   </div>
                   <ol className="list-decimal list-inside text-[11px] space-y-1 text-zinc-300">
-                    <li>Open <a href="https://colab.research.google.com" target="_blank" rel="noreferrer" className="text-amber-400 underline">colab.research.google.com</a></li>
-                    <li>Upload <code className="bg-zinc-900 px-1 py-0.5 rounded text-amber-300">xtts_colab_worker.ipynb</code></li>
-                    <li>Set <strong>Runtime → Change runtime type → T4 GPU</strong></li>
-                    <li>Run all cells (<code className="bg-zinc-900 px-1 py-0.5 rounded text-amber-300">Ctrl + F9</code>)</li>
+                    <li>To run instantly without GPU, select <strong>Google Gemini Flash TTS</strong> above.</li>
+                    <li>To clone custom voices with XTTS-v2, open <a href="/notebooks/xtts_colab_worker.ipynb" target="_blank" rel="noreferrer" className="text-amber-400 underline">xtts_colab_worker.ipynb</a> in Google Colab (T4 GPU).</li>
                   </ol>
                 </div>
               )}
@@ -298,7 +481,13 @@ export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
                 <CheckCircle2 className="h-4 w-4" />
                 <span>Generated Output Audio</span>
               </div>
-              <AudioPlayer result={result} />
+              <AudioPlayer
+                result={result}
+                onOpenSharePage={onOpenSharePage}
+                onRegenerateVoice={() => {
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+              />
             </div>
           )}
 
@@ -316,19 +505,23 @@ export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
             {/* Speaking Style / Emotion */}
             <div className="space-y-2">
               <label className="text-xs font-medium text-zinc-300 flex justify-between">
-                <span>Speaking Style</span>
+                <span>Speaking Style / Mood</span>
                 <span className="text-amber-400 font-mono text-[11px]">{speakingStyle}</span>
               </label>
               <select
                 value={speakingStyle}
-                onChange={(e) => setSpeakingStyle(e.target.value)}
+                onChange={(e) => {
+                  setSpeakingStyle(e.target.value);
+                  setActivePresetId(null);
+                }}
                 className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs text-white focus:border-amber-500 focus:outline-none"
               >
+                <option value="Dark & Gripping">Dark & Gripping (Crime / History)</option>
+                <option value="Authoritative">Authoritative (Documentary / Science)</option>
+                <option value="Energetic">Energetic (YouTube / Fast Paced)</option>
+                <option value="Inspiring">Inspiring (Motivational / Speeches)</option>
+                <option value="Intimate & Calm">Intimate & Calm (Story / Podcast)</option>
                 <option value="Neutral">Neutral / Standard</option>
-                <option value="Enthusiastic">Enthusiastic / Upbeat</option>
-                <option value="Serious">Serious / Documentary</option>
-                <option value="Soft">Soft / Whisper</option>
-                <option value="Dramatic">Dramatic Narration</option>
               </select>
             </div>
 
@@ -336,23 +529,31 @@ export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
             <div className="space-y-2">
               <div className="flex justify-between text-xs text-zinc-300">
                 <span>Pacing / Speed</span>
-                <span className="font-mono text-amber-400">{speed.toFixed(1)}x</span>
+                <span className="font-mono text-amber-400">{speed.toFixed(2)}x</span>
               </div>
               <input
                 type="range"
                 min={0.5}
-                max={2.0}
-                step={0.1}
+                max={1.8}
+                step={0.05}
                 value={speed}
-                onChange={(e) => setSpeed(parseFloat(e.target.value))}
+                onChange={(e) => {
+                  setSpeed(parseFloat(e.target.value));
+                  setActivePresetId(null);
+                }}
                 className="w-full h-1.5 bg-zinc-800 rounded-lg accent-amber-500 cursor-pointer"
               />
+              <div className="flex justify-between text-[10px] text-zinc-500 font-mono">
+                <span>0.5x (Slow)</span>
+                <span>1.0x</span>
+                <span>1.8x (Fast)</span>
+              </div>
             </div>
 
             {/* Temperature Slider */}
             <div className="space-y-2">
               <div className="flex justify-between text-xs text-zinc-300">
-                <span>Temperature (Expressiveness)</span>
+                <span>Expressiveness / Temp</span>
                 <span className="font-mono text-amber-400">{temperature.toFixed(2)}</span>
               </div>
               <input
@@ -361,10 +562,13 @@ export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
                 max={1.0}
                 step={0.05}
                 value={temperature}
-                onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                onChange={(e) => {
+                  setTemperature(parseFloat(e.target.value));
+                  setActivePresetId(null);
+                }}
                 className="w-full h-1.5 bg-zinc-800 rounded-lg accent-amber-500 cursor-pointer"
               />
-              <p className="text-[10px] text-zinc-500">Higher values add expressiveness; lower values increase consistency.</p>
+              <p className="text-[10px] text-zinc-500">Lower values create steady cadence; higher values add inflection dynamics.</p>
             </div>
 
             {/* Repetition Penalty Slider */}
@@ -376,10 +580,13 @@ export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
               <input
                 type="range"
                 min={1.0}
-                max={10.0}
-                step={0.5}
+                max={5.0}
+                step={0.1}
                 value={repetitionPenalty}
-                onChange={(e) => setRepetitionPenalty(parseFloat(e.target.value))}
+                onChange={(e) => {
+                  setRepetitionPenalty(parseFloat(e.target.value));
+                  setActivePresetId(null);
+                }}
                 className="w-full h-1.5 bg-zinc-800 rounded-lg accent-amber-500 cursor-pointer"
               />
             </div>
@@ -419,9 +626,9 @@ export const VoiceoverPage: React.FC<VoiceoverPageProps> = ({
       </div>
 
       {/* Pronunciation Modal */}
-      {selectedVoice && (
+      {selectedCustomVoice && (
         <PronunciationModal
-          voice={selectedVoice}
+          voice={selectedCustomVoice}
           isOpen={isPronunciationModalOpen}
           onClose={() => setIsPronunciationModalOpen(false)}
           onSave={onUpdatePronunciation}

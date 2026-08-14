@@ -24,12 +24,13 @@ export class GeminiProvider implements VoiceProvider {
     });
   }
 
-  private mapVoiceName(voiceProfile?: VoiceProfile, speakingStyle?: string): 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' {
-    const text = `${voiceProfile?.name || ''} ${speakingStyle || ''}`.toLowerCase();
-    if (text.includes('fenrir') || text.includes('deep') || text.includes('male') || text.includes('doc') || text.includes('authoritative')) return 'Fenrir';
-    if (text.includes('puck') || text.includes('story') || text.includes('playful') || text.includes('cheerful')) return 'Puck';
-    if (text.includes('charon') || text.includes('serious') || text.includes('news') || text.includes('dramatic')) return 'Charon';
-    if (text.includes('zephyr') || text.includes('calm') || text.includes('meditation') || text.includes('gentle')) return 'Zephyr';
+  private mapVoiceName(voiceId?: string, voiceProfile?: VoiceProfile, speakingStyle?: string): 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' {
+    const raw = `${voiceId || ''} ${voiceProfile?.id || ''} ${voiceProfile?.name || ''} ${speakingStyle || ''}`.toLowerCase();
+    
+    if (raw.includes('fenrir') || raw.includes('deep') || raw.includes('male') || raw.includes('authoritative') || raw.includes('motivational')) return 'Fenrir';
+    if (raw.includes('puck') || raw.includes('youtube') || raw.includes('energetic') || raw.includes('playful') || raw.includes('cheerful')) return 'Puck';
+    if (raw.includes('charon') || raw.includes('trailer') || raw.includes('epic') || raw.includes('serious') || raw.includes('news') || raw.includes('dramatic')) return 'Charon';
+    if (raw.includes('zephyr') || raw.includes('calm') || raw.includes('meditation') || raw.includes('gentle') || raw.includes('podcast') || raw.includes('story')) return 'Zephyr';
     return 'Kore';
   }
 
@@ -58,7 +59,7 @@ export class GeminiProvider implements VoiceProvider {
 
   async processJob(job: TTSJob, voiceProfile?: VoiceProfile): Promise<TTSResult> {
     const ai = this.getGenAIClient();
-    const voiceName = this.mapVoiceName(voiceProfile, job.speaking_style);
+    const voiceName = this.mapVoiceName(job.voice_id, voiceProfile, job.speaking_style);
 
     const promptText = job.processed_text || job.text;
     const prompt = job.speaking_style && job.speaking_style !== 'Neutral'
