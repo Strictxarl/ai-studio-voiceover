@@ -1,13 +1,20 @@
 import { VoiceProvider } from './VoiceProvider.js';
-import { ProviderStatusInfo } from '../../src/types.js';
+import { ProviderStatusInfo, TTSJob, VoiceProfile, TTSResult } from '../../src/types.js';
 
-export class GeminiProvider extends VoiceProvider {
+export class GeminiProvider implements VoiceProvider {
   public readonly id = 'gemini';
   public readonly name = 'Google Gemini TTS';
   public readonly model = 'gemini-2.5-flash-preview-tts';
   public readonly supportsCloning = false;
 
-  public async getStatus(): Promise<ProviderStatusInfo> {
+  async processJob(
+    _job: TTSJob,
+    _voiceProfile?: VoiceProfile
+  ): Promise<TTSResult> {
+    throw new Error('Gemini TTS generation not implemented yet');
+  }
+
+  async getStatus(): Promise<ProviderStatusInfo> {
     return {
       id: this.id,
       name: this.name,
